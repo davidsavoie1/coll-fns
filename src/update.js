@@ -4,11 +4,38 @@ import { getHook } from "./hook";
 import { getProtocol } from "./protocol";
 import { indexById, isFunc, then } from "./util";
 
-/* Update document inside a collection.
- * Wrapped by `beforeUpdate` and `onUpdated` hooks.
- * Written with `then` helper and callbacks ON PURPOSE
- * so that it can be used either with a synchronous
- * or asynchronous protocol without any difference. */
+/**
+ * Update documents in a collection with hook support.
+ *
+ * Execution flow (sync or async depending on the active protocol):
+ * 1) Determine the minimal fields to prefetch for hooks (union of beforeUpdate/onUpdated needs).
+ * 2) If any hook exists, fetch the target documents once with those fields (limit 1 if multi=false).
+ * 3) Run `beforeUpdate` hook with (docs, modifier) if present.
+ * 4) Execute protocol.update(Coll, selector, modifier, options).
+ * 5) If some docs were modified and `onUpdated` exists:
+ *    - Re-fetch affected docs by _id with `onUpdated.fields`
+ *    - Call `onUpdated(afterDoc, beforeDoc)` for each (fire-and-forget).
+ *
+ * Notes:
+ * - Uses `then` helper to normalize sync/async protocols and hooks.
+ * - `onUpdated` is not awaited; it is intended for side effects.
+ *
+ * @template TColl
+ * @param {TColl} Coll - The collection instance.
+ * @param {Object} selector - MongoDB-style selector to match documents.
+ * @param {Object} modifier - MongoDB-style update modifier (e.g., {$set: {...}}).
+ * @param {Object} [options] - Update options.
+ * @param {boolean} [options.multi=true] - Update multiple documents by default.
+ * @returns {number|Promise<number>} Number of modified documents (driver-dependent).
+ *
+ * @example
+ * // Activate all pending users
+ * await update(Users, { status: 'pending' }, { $set: { status: 'active' } }, { multi: true });
+ *
+ * @example
+ * // Update a single document
+ * await update(Users, { _id }, { $set: { name: 'Alice' } }, { multi: false });
+ */
 export function update(
   Coll,
   selector,
@@ -16,7 +43,7 @@ export function update(
   {
     multi = true, // Ensure update targets multiple documents by default.
     ...restOptions
-  } = {}
+  } = {},
 ) {
   const protocol = getProtocol();
 
@@ -25,6 +52,7 @@ export function update(
 
   const options = { multi, ...restOptions };
 
+  // Fields to prefetch before update (null => no hooks => no prefetch)
   const fieldsBefore = getBeforeFields(beforeUpdateHook, onUpdatedHook);
 
   return then(
@@ -58,7 +86,7 @@ export function update(
                 fetchList(
                   Coll,
                   { _id: { $in: Object.keys(beforeById) } },
-                  { fields: onUpdatedHook.fields }
+                  { fields: onUpdatedHook.fields },
                 ),
 
                 /* Pass the before and after versions to each comparator. */
@@ -71,16 +99,31 @@ export function update(
                   });
 
                   return updatedCount;
-                }
+                },
               );
-            }
+            },
           );
-        }
+        },
       );
-    }
+    },
   );
 }
 
+/**
+ * Compute fields to prefetch before the update for hooks.
+ *
+ * Returns:
+ * - null if no hooks are defined (signals "no prefetch needed")
+ * - the union of:
+ *   - beforeUpdate.fields (if any)
+ *   - onUpdated.fields, or {_id:1} if onUpdated.before is falsy
+ *
+ * @param {{fields?: import('./fields').FieldSpec|true|undefined}|undefined} beforeHook
+ * @param {{fields?: import('./fields').FieldSpec|true|undefined, before?: boolean}|undefined} afterHook
+ * @returns {import('./fields').FieldSpec|true|undefined|null}
+ *   Combined fields, or null if there are no hooks at all.
+ * @internal
+ */
 function getBeforeFields(beforeHook, afterHook) {
   /* If no hooks, return null */
   if (!beforeHook && !afterHook) return null;

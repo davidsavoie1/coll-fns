@@ -4,56 +4,90 @@ import { getHook } from "./hook";
 import { getProtocol } from "./protocol";
 import { isFunc, then } from "./util";
 
-/* Remove document inside a collection.
- * Wrapped by `beforeRemove` and `onRemoved hooks.
- * Written with `then` helper and callbacks ON PURPOSE
- * so that it can be used either with a synchronous
- * or asynchronous protocol without any difference. */
+/**
+ * Remove documents from a collection with hook support.
+ *
+ * Execution flow (sync or async depending on the active protocol):
+ * 1) Compute the minimal fields to fetch for hooks (union of beforeRemove/onRemoved fields).
+ * 2) If any hook is defined, fetch the matching documents once with those fields.
+ * 3) Run `beforeRemove` hook (if present) with the array of docs.
+ * 4) Call protocol.remove(Coll, selector).
+ * 5) If something was removed and `onRemoved` exists, call it once per doc (fire-and-forget).
+ *
+ * Notes:
+ * - Uses the `then` helper to normalize sync/async protocols and hooks.
+ * - `onRemoved` is intentionally not awaited; it runs after remove is triggered.
+ * - If no hooks are registered, no pre-fetch is performed.
+ *
+ * @template TColl
+ * @param {TColl} Coll - The collection instance to remove from.
+ * @param {Object} selector - MongoDB-style query selector.
+ * @returns {number|Promise<number>} The number of removed documents (driver-dependent).
+ *
+ * @example
+ * // Basic usage
+ * const removed = await remove(Users, { inactive: true });
+ *
+ * @example
+ * // With hooks configured elsewhere
+ * // beforeRemove could check permissions; onRemoved could clear caches
+ * const n = await remove(Posts, { authorId });
+ */
 export function remove(Coll, selector) {
   const protocol = getProtocol();
 
   const beforeRemoveHook = getHook(Coll, "beforeRemove");
   const onRemovedHook = getHook(Coll, "onRemoved");
 
+  // Union of fields requested by before/on hooks; null means "no hooks, no fetch"
   const globalFields = getBeforeFields(beforeRemoveHook, onRemovedHook);
 
   return then(
-    /* Fetch docs only if at least one hook has been defined. */
+    // Fetch docs only when at least one hook exists
     globalFields === null
       ? []
       : fetchList(Coll, selector, { fields: globalFields }),
 
     (docs) => {
       return then(
-        /* Execute `beforeRemove` hook if defined */
+        // Run `beforeRemove` if defined
         isFunc(beforeRemoveHook?.fn) && beforeRemoveHook.fn(docs),
 
         () => {
-          /* Execute actual removal */
+          // Execute actual removal (can be sync or a Promise<number>)
           const removedCount = protocol.remove(Coll, selector);
 
-          /* If removal didn't do anything, do not pass docs to hook */
+          // If removal did nothing or there is no onRemoved hook, return as-is
           if (!removedCount || !isFunc(onRemovedHook?.fn)) return removedCount;
 
-          /* Pass each doc to hook.
-           * Do NOT await with `then`, should run asynchronously if protocol allows. */
+          // Fire-and-forget: pass each (pre-fetched) doc to onRemoved
           docs.forEach((doc) => onRemovedHook.fn(doc));
 
           return removedCount;
-        }
+        },
       );
-    }
+    },
   );
 }
 
-/* Return a valid field object (including `undefined` for all)
- * or `null` if no hook definition was provided as argument. */
+/**
+ * Compute the union of the fields requested by provided hook definitions.
+ *
+ * Returns:
+ * - null when no hooks are provided (signals "no pre-fetch needed")
+ * - a FieldSpec (possibly undefined meaning "all fields") combining hook fields
+ *
+ * @param {...{fields?: import('./fields').FieldSpec|true|undefined}|undefined} maybeHooks
+ * @returns {import('./fields').FieldSpec|true|undefined|null}
+ *   Combined fields, or null if there were no hooks at all.
+ * @internal
+ */
 function getBeforeFields(...maybeHooks) {
   const hookDefs = maybeHooks.filter((hookDef) => hookDef);
   if (!hookDefs.length) return null;
 
   return hookDefs.reduce(
     (fields, hookDef) => combineFields(fields, hookDef.fields),
-    null
+    null,
   );
 }

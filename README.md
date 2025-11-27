@@ -27,14 +27,21 @@ npm install coll-fns
 ## Quick Start
 
 ```js
-import { setProtocol, fetch, insert, update, remove, count } from "coll-fns";
-import nodeProtocol from "coll-fns/protocols/node";
+import {
+  setProtocol,
+  fetchList,
+  insert,
+  update,
+  remove,
+  count,
+  protocols,
+} from "coll-fns";
 
 // Set up your protocol
-setProtocol(nodeProtocol(mongoClient));
+setProtocol(protocols.node(mongoClient));
 
 // Use the API
-const users = await fetch(UsersCollection, { age: { $gte: 18 } });
+const users = await fetchList(UsersCollection, { age: { $gte: 18 } });
 await insert(UsersCollection, { name: "Alice", age: 25 });
 await update(UsersCollection, { name: "Alice" }, { $set: { age: 26 } });
 const total = await count(UsersCollection, {});
@@ -48,7 +55,7 @@ One of the most powerful features of `coll-fns` is its ability to define declara
 ### Basic Join Example
 
 ```js
-const posts = await fetch(
+const posts = await fetchList(
   PostsCollection,
   {},
   {
@@ -64,7 +71,7 @@ const posts = await fetch(
       content: 1,
       "+": { author: 1 }, // Use '+' prefix to include join fields
     },
-  },
+  }
 );
 
 // Result: Each post includes an 'author' object with name, avatar, and email
@@ -73,7 +80,7 @@ const posts = await fetch(
 ### One-to-Many Joins
 
 ```js
-const posts = await fetch(
+const posts = await fetchList(
   PostsCollection,
   {},
   {
@@ -89,7 +96,7 @@ const posts = await fetch(
       title: 1,
       "+": { comments: 1 },
     },
-  },
+  }
 );
 
 // Result: Each post includes a 'comments' array
@@ -100,7 +107,7 @@ const posts = await fetch(
 Joins can be nested to fetch deeply related data:
 
 ```js
-const posts = await fetch(
+const posts = await fetchList(
   PostsCollection,
   {},
   {
@@ -129,7 +136,7 @@ const posts = await fetch(
       content: 1,
       "+": { author: 1, comments: 1 },
     },
-  },
+  }
 );
 
 // Result: Posts with author details and comments, each comment with user details
@@ -140,7 +147,7 @@ const posts = await fetch(
 Control the depth of recursive joins to prevent infinite loops:
 
 ```js
-const users = await fetch(
+const users = await fetchList(
   UsersCollection,
   {},
   {
@@ -163,7 +170,7 @@ const users = await fetch(
       name: 1,
       "+": { friends: 2 }, // Limit to 2 levels deep
     },
-  },
+  }
 );
 ```
 
@@ -174,10 +181,10 @@ Hooks allow you to react to CRUD operations, enabling validation, transformation
 ### Setting Up Hooks
 
 ```js
-import { addHook } from "coll-fns";
+import { hook } from "coll-fns";
 
 // Before insert hook - validation and transformation
-addHook(UsersCollection, "insert", "before", (doc) => {
+hook(UsersCollection, "insert", "before", (doc) => {
   if (!doc.email) {
     throw new Error("Email is required");
   }
@@ -188,7 +195,7 @@ addHook(UsersCollection, "insert", "before", (doc) => {
 });
 
 // After insert hook - side effects
-addHook(UsersCollection, "insert", "after", (doc) => {
+hook(UsersCollection, "insert", "after", (doc) => {
   console.log(`New user created: ${doc.name}`);
   // Send welcome email, update analytics, etc.
   sendWelcomeEmail(doc.email);
@@ -210,9 +217,9 @@ Hooks can be attached to any CRUD operation:
 
 ```js
 // Prevent unauthorized updates
-addHook(PostsCollection, "update", "before", (selector, modifier, options) => {
+hook(PostsCollection, "update", "before", (selector, modifier, options) => {
   const currentUserId = getCurrentUserId();
-  const post = fetch(PostsCollection, selector)[0];
+  const post = fetchList(PostsCollection, selector)[0];
 
   if (post.authorId !== currentUserId) {
     throw new Error("Unauthorized");
@@ -226,13 +233,13 @@ addHook(PostsCollection, "update", "before", (selector, modifier, options) => {
 
 ```js
 // Add timestamps automatically
-addHook(PostsCollection, "insert", "before", (doc) => {
+hook(PostsCollection, "insert", "before", (doc) => {
   doc.createdAt = new Date();
   doc.updatedAt = new Date();
   return doc;
 });
 
-addHook(PostsCollection, "update", "before", (selector, modifier, options) => {
+hook(PostsCollection, "update", "before", (selector, modifier, options) => {
   if (!modifier.$set) modifier.$set = {};
   modifier.$set.updatedAt = new Date();
   return [selector, modifier, options];
@@ -243,7 +250,7 @@ addHook(PostsCollection, "update", "before", (selector, modifier, options) => {
 
 ```js
 // Log all changes
-addHook(PostsCollection, "update", "after", (result, selector, modifier) => {
+hook(PostsCollection, "update", "after", (result, selector, modifier) => {
   logToAuditTrail({
     collection: "posts",
     action: "update",
@@ -259,7 +266,7 @@ addHook(PostsCollection, "update", "after", (result, selector, modifier) => {
 
 ```js
 // Update denormalized data
-addHook(UsersCollection, "update", "after", (result, selector, modifier) => {
+hook(UsersCollection, "update", "after", (result, selector, modifier) => {
   const userId = selector._id;
   const userName = modifier.$set?.name;
 
@@ -269,7 +276,7 @@ addHook(UsersCollection, "update", "after", (result, selector, modifier) => {
       PostsCollection,
       { authorId: userId },
       { $set: { authorName: userName } },
-      { multi: true },
+      { multi: true }
     );
   }
 });
@@ -277,21 +284,20 @@ addHook(UsersCollection, "update", "after", (result, selector, modifier) => {
 
 ## Meteor Integration: Isomorphic by Design
 
-`coll-fns` was specifically designed to solve Meteor's challenge of writing code that works both on the client (synchronous MiniMongo) and server (asynchronous MongoDB) with the same API.
+`coll-fns` was specifically designed to solve Meteor's challenge of writing code that works both on the client (synchronous) and server (asynchronous) with the same API.
 
 ### Server-Side (Async)
 
 ```js
 // server/main.js
-import { setProtocol } from "coll-fns";
-import meteorAsync from "coll-fns/protocols/meteorAsync";
+import { setProtocol, protocols } from "coll-fns";
 
-setProtocol(meteorAsync);
+setProtocol(protocols.meteorAsync);
 
 // Methods automatically work with async
 Meteor.methods({
   async createPost(title, content) {
-    const user = await fetch(UsersCollection, { _id: this.userId });
+    const user = await fetchOne(UsersCollection, { _id: this.userId });
     return await insert(PostsCollection, {
       title,
       content,
@@ -305,13 +311,12 @@ Meteor.methods({
 
 ```js
 // client/main.js
-import { setProtocol } from "coll-fns";
-import meteorSync from "coll-fns/protocols/meteorSync";
+import { setProtocol, protocols } from "coll-fns";
 
-setProtocol(meteorSync);
+setProtocol(protocols.meteorSync);
 
 // Same API, synchronous execution
-const posts = fetch(
+const posts = fetchList(
   PostsCollection,
   {},
   {
@@ -322,7 +327,7 @@ const posts = fetch(
       },
     },
     fields: { title: 1, "+": { author: 1 } },
-  },
+  }
 );
 ```
 
@@ -330,11 +335,11 @@ const posts = fetch(
 
 ```js
 // imports/api/posts.js
-import { fetch } from "coll-fns";
+import { fetchList } from "coll-fns";
 
 // This function works on both client and server!
 export function getPostsWithAuthors() {
-  return fetch(
+  return fetchList(
     PostsCollection,
     {},
     {
@@ -346,7 +351,7 @@ export function getPostsWithAuthors() {
         },
       },
       fields: { title: 1, content: 1, "+": { author: 1 } },
-    },
+    }
   );
 }
 ```
@@ -355,12 +360,12 @@ export function getPostsWithAuthors() {
 
 ### Core Functions
 
-#### `fetch(collection, selector, options)`
+#### `fetchList(collection, selector, options)`
 
-Fetch documents from a collection.
+Fetch an array of documents from a collection.
 
 ```js
-const users = await fetch(
+const users = await fetchList(
   UsersCollection,
   { status: "active" },
   {
@@ -368,7 +373,7 @@ const users = await fetch(
     sort: { createdAt: -1 },
     limit: 10,
     skip: 0,
-  },
+  }
 );
 ```
 
@@ -379,6 +384,38 @@ const users = await fetch(
 - `limit`: Maximum number of documents
 - `skip`: Number of documents to skip
 - `joins`: Join definitions for related collections
+
+#### `fetchOne(collection, selector, options)`
+
+Fetch a single document from a collection.
+
+```js
+const user = await fetchOne(
+  UsersCollection,
+  { _id: userId },
+  {
+    fields: { name: 1, email: 1 },
+  }
+);
+```
+
+#### `fetchIds(collection, selector, options)`
+
+Fetch only the `_id` field of matching documents.
+
+```js
+const userIds = await fetchIds(UsersCollection, { status: "active" });
+// Returns: ['id1', 'id2', 'id3']
+```
+
+#### `exists(collection, selector)`
+
+Check if any documents match the selector.
+
+```js
+const hasActiveUsers = await exists(UsersCollection, { status: "active" });
+// Returns: true or false
+```
 
 #### `insert(collection, doc)`
 
@@ -400,7 +437,7 @@ await update(
   UsersCollection,
   { status: "pending" },
   { $set: { status: "active" } },
-  { multi: true },
+  { multi: true }
 );
 ```
 
@@ -422,12 +459,12 @@ const activeUsers = await count(UsersCollection, { status: "active" });
 
 ### Hook Functions
 
-#### `addHook(collection, operation, timing, fn)`
+#### `hook(collection, operation, timing, fn)`
 
 Add a hook to a collection operation.
 
 ```js
-addHook(UsersCollection, "insert", "before", (doc) => {
+hook(UsersCollection, "insert", "before", (doc) => {
   // Modify or validate doc
   return doc;
 });
@@ -447,10 +484,9 @@ addHook(UsersCollection, "insert", "before", (doc) => {
 Set the active database protocol.
 
 ```js
-import { setProtocol } from "coll-fns";
-import meteorAsync from "coll-fns/protocols/meteorAsync";
+import { setProtocol, protocols } from "coll-fns";
 
-setProtocol(meteorAsync);
+setProtocol(protocols.meteorAsync);
 ```
 
 #### `getProtocol()`
@@ -461,13 +497,25 @@ Get the current active protocol.
 const currentProtocol = getProtocol();
 ```
 
+#### `updateProtocol(updates)`
+
+Update specific methods of the current protocol.
+
+```js
+import { updateProtocol } from "coll-fns";
+
+updateProtocol({
+  fetch: customFetchImplementation,
+});
+```
+
 ### Field Projections
 
 #### Nested Fields
 
 ```js
 // Nested object notation
-const users = await fetch(
+const users = await fetchList(
   UsersCollection,
   {},
   {
@@ -478,11 +526,11 @@ const users = await fetch(
         city: 1,
       },
     },
-  },
+  }
 );
 
 // Dot notation (MongoDB-style)
-const users = await fetch(
+const users = await fetchList(
   UsersCollection,
   {},
   {
@@ -491,53 +539,59 @@ const users = await fetch(
       "address.street": 1,
       "address.city": 1,
     },
-  },
+  }
 );
 ```
 
-#### Combining Fields
+#### Flattening Fields
 
 ```js
-import { combineFields } from "coll-fns";
+import { flattenFields } from "coll-fns";
 
-const combined = combineFields({ name: 1, email: 1 }, { email: 1, phone: 1 });
-// Result: { name: 1, email: 1, phone: 1 }
+const flattened = flattenFields({
+  name: 1,
+  address: {
+    street: 1,
+    city: 1,
+  },
+});
+// Result: { name: 1, 'address.street': 1, 'address.city': 1 }
 ```
 
 ## Available Protocols
 
+All protocols are available through the `protocols` namespace:
+
+```js
+import { protocols } from "coll-fns";
+```
+
 ### Node.js (MongoDB)
 
 ```js
-import nodeProtocol from "coll-fns/protocols/node";
+import { setProtocol, protocols } from "coll-fns";
 import { MongoClient } from "mongodb";
 
 const client = new MongoClient(url);
-setProtocol(nodeProtocol(client));
+await client.connect();
+setProtocol(protocols.node(client));
 ```
 
 ### Meteor (Synchronous)
 
 ```js
-import meteorSync from "coll-fns/protocols/meteorSync";
-setProtocol(meteorSync);
+import { setProtocol, protocols } from "coll-fns";
+
+setProtocol(protocols.meteorSync);
 ```
 
 ### Meteor (Asynchronous)
 
 ```js
-import meteorAsync from "coll-fns/protocols/meteorAsync";
-setProtocol(meteorAsync);
+import { setProtocol, protocols } from "coll-fns";
+
+setProtocol(protocols.meteorAsync);
 ```
-
-## Utility Functions
-
-The library provides several utility functions:
-
-- `then(value, fn)`: Handle both sync and async values
-- `isObj(value)`: Check if value is a plain object
-- `filter(predicate, obj)`: Filter object entries
-- `mapValues(fn, obj)`: Map over object values
 
 ## Advanced Usage
 
@@ -567,15 +621,33 @@ const customProtocol = {
 setProtocol(customProtocol);
 ```
 
-### Recursive Field Management
+### Join Management
+
+#### Setting Custom Join Prefix
+
+By default, join fields are prefixed with `+`. You can customize this:
 
 ```js
-import { decrementRecursiveField } from "coll-fns";
+import { setJoinPrefix } from "coll-fns";
 
-// Useful for limiting nested join depth
-const fields = { "+": { author: 2, comments: 1 } };
-const decremented = decrementRecursiveField("author", fields);
-// Result: { '+': { author: 1, comments: 1 } }
+setJoinPrefix("joins"); // Now use { joins: { author: 1 } } instead of { '+': { author: 1 } }
+```
+
+If join prefix is set to a falsy value, join fields can be declared at the document root like any native field.
+
+```js
+import { setJoinPrefix } from "coll-fns";
+
+setJoinPrefix(null); // Now use { author: 1 } instead of { '+': { author: 1 } }
+```
+
+#### Getting Join Configuration
+
+```js
+import { getJoins, getJoinPrefix } from "coll-fns";
+
+const joins = getJoins(fields); // Extract join definitions from fields
+const prefix = getJoinPrefix(); // Get current join prefix (default: '+')
 ```
 
 ## Project Structure
@@ -583,7 +655,7 @@ const decremented = decrementRecursiveField("author", fields);
 ```
 src/
 ├── count.js          - Count operation
-├── fetch.js          - Fetch operation with joins support
+├── fetch.js          - Fetch operations (fetchList, fetchOne, fetchIds, exists)
 ├── fields.js         - Field projection utilities
 ├── hook.js           - Hook system for extending operations
 ├── index.js          - Main exports
@@ -594,6 +666,7 @@ src/
 ├── update.js         - Update operation
 ├── util.js           - Utility functions
 └── protocols/        - Database protocol implementations
+    ├── index.js
     ├── meteorAsync.js
     ├── meteorSync.js
     └── node.js

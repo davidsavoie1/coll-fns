@@ -7,3 +7,5 @@ export { join, getJoins, getJoinPrefix, setJoinPrefix } from "./join";
 export { remove } from "./remove";
 export { getProtocol, setProtocol, updateProtocol } from "./protocol";
 export { update } from "./update";
+
+export * as protocols from "./protocols";

@@ -1,15 +1,28 @@
 {
   "name": "coll-fns",
   "version": "1.0.0",
+  "type": "module",
   "description": "",
-  "main": "index.js",
   "scripts": {
+    "build": "microbundle -f esm,cjs",
+    "dev": "microbundle watch -f esm,cjs",
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "files": [
+    "dist"
+  ],
+  "source": "src/index.js",
+  "main": "./dist/coll-fns.cjs",
+  "module": "./dist/coll-fns.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/coll-fns.mjs",
+      "require": "./dist/coll-fns.cjs"
+    }
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module",
   "devDependencies": {
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",

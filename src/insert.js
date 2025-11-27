@@ -3,24 +3,48 @@ import { getHook } from "./hook";
 import { getProtocol } from "./protocol";
 import { isFunc, then } from "./util";
 
-/* Insert document inside a collection.
- * Wrapped by `beforeInsert` and `onInserted` hooks.
- * Written with `then` helper and callbacks ON PURPOSE
- * so that it can be used either with a synchronous
- * or asynchronous protocol without any difference. */
+/**
+ * Insert a document into a collection with hook support.
+ *
+ * Execution flow (sync or async depending on the active protocol):
+ * 1) Run `beforeInsert` hook if defined: can validate/mutate the doc.
+ * 2) Call protocol.insert(Coll, doc) to perform the insertion.
+ * 3) Run `onInserted` hook if defined:
+ *    - If the hook requests only {_id: 1}, pass {_id} directly.
+ *    - Otherwise fetch the inserted document with the requested fields,
+ *      then pass it to the hook.
+ *
+ * Notes:
+ * - Uses the `then` helper to normalize sync/async protocols and hooks.
+ * - Does not await `onInserted` (fire-and-forget side effects).
+ *
+ * @template TColl
+ * @param {TColl} Coll - The collection instance to insert into.
+ * @param {Object} doc - The document to insert (will be passed to beforeInsert hooks).
+ * @returns {any|Promise<any>} The inserted document _id (type depends on protocol/driver).
+ *
+ * @example
+ * // Basic usage
+ * const _id = await insert(Users, { name: 'Alice', email: 'a@ex.com' });
+ *
+ * @example
+ * // With hooks configured elsewhere
+ * // beforeInsert could normalize fields; onInserted could enqueue a job
+ * const userId = await insert(Users, payload);
+ */
 export function insert(Coll, doc) {
   const protocol = getProtocol();
   const beforeInsertHook = getHook(Coll, "beforeInsert");
 
   return then(
-    /* Execute `beforeInsert` hook if defined */
+    // Run `beforeInsert` if present (may mutate/validate doc)
     isFunc(beforeInsertHook?.fn) && beforeInsertHook.fn(doc),
 
     () => {
       const onInsertedHook = getHook(Coll, "onInserted");
 
       return then(
-        /* Execute actual insert */
+        // Perform actual insert via protocol
         protocol.insert(Coll, doc),
 
         (_id) => {
@@ -28,25 +52,22 @@ export function insert(Coll, doc) {
 
           const { fields, fn: onInserted } = onInsertedHook;
 
-          /* Handle case where the only requested field is _id,
-           * since no fetch is then necessary */
+          // If hook only needs _id, no fetch is necessary
           const fieldKeys = fields ? Object.keys(fields) : [];
-
           const _idOnly = fieldKeys.length === 1 && fieldKeys[0] === "_id";
 
           return then(
-            /* Fetch inserted doc or minimally use only its inserted _id */
+            // Fetch inserted doc or pass {_id} directly
             _idOnly ? { _id } : fetchOne(Coll, { _id }, { fields }),
 
             (insertedDoc) => {
-              /* Do NOT await the after update hook with `then` */
+              // Fire-and-forget: don't await onInserted
               onInserted(insertedDoc);
-
               return _id;
-            }
+            },
           );
-        }
+        },
       );
-    }
+    },
   );
 }

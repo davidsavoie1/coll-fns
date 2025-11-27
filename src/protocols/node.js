@@ -1,50 +1,69 @@
-import { renameKeys } from "./util";
+import { renameKeys } from "../util";
 
+/**
+ * Node protocol for the official MongoDB driver.
+ * Assumes Coll is an instance of mongodb.Collection.
+ */
 export default {
-  /* A function that takes a collection, selector and options
-   * and returns a number of documents. */
-  async count(Coll, selector = {}, options = {}) {
-    const cursor = await Coll.find(selector, options);
-    return cursor.count();
+  /**
+   * Count documents matching selector.
+   * Uses countDocuments (preferred over deprecated cursor.count()).
+   */
+  count(Coll, selector = {}, options = {}) {
+    return Coll.countDocuments(selector || {}, options);
   },
 
-  cursor: (Coll, selector, options) => {
-    const renamedOptions = renameKeys({ fields: "projection" }, options);
-    return Coll.find(selector, renamedOptions);
+  /**
+   * Return a MongoDB FindCursor for advanced usage.
+   * Maps fields -> projection.
+   */
+  cursor(Coll, selector = {}, options = {}) {
+    const renamedOptions = renameKeys({ fields: "projection" }, options || {});
+    return Coll.find(selector || {}, renamedOptions);
   },
 
-  /* A function that takes a collection, selector and options
-   * and returns a list of documents. */
-  async findList(Coll, selector = {}, options = {}) {
-    const renamedOptions = renameKeys({ fields: "projection" }, options);
-    const cursor = await Coll.find(selector, renamedOptions);
-    return cursor.toArray();
+  /**
+   * Return an array of documents for selector/options.
+   */
+  findList(Coll, selector = {}, options = {}) {
+    const renamedOptions = renameKeys({ fields: "projection" }, options || {});
+    return Coll.find(selector || {}, renamedOptions).toArray();
   },
 
-  /* A function that transforms each document defined at the collection level.
-   * For retrocompatibility with Metor collections. No default NodeJS implementation. */
-  getTransform(/* Coll */) {
-    return undefined;
+  /**
+   * Optional per-collection transform; expose Coll.transform if present.
+   */
+  getTransform(Coll) {
+    return typeof Coll?.transform === "function" ? Coll.transform : undefined;
   },
 
-  /* A function that inserts a doc in a collection asynchronously
-   * and returns the inserted _id. */
-  async insert(Coll, doc, options) {
-    const res = await Coll.insertOne(doc, options);
-    return res?.insertedId;
+  /**
+   * Insert a document and return insertedId.
+   */
+  insert(Coll, doc, options) {
+    return Coll.insertOne(doc, options).then((res) => res?.insertedId);
   },
 
-  async remove(Coll, selector, options) {
-    const res = await Coll.deleteMany(selector, options);
-    return res?.deletedCount;
+  /**
+   * Remove documents. Honors options.multi (default true).
+   */
+  remove(Coll, selector = {}, options = {}) {
+    const { multi = true, ...rest } = options || {};
+    const p = multi
+      ? Coll.deleteMany(selector || {}, rest)
+      : Coll.deleteOne(selector || {}, rest);
+    return p.then((res) => res?.deletedCount ?? 0);
   },
 
-  async update(Coll, selector, modifier, options) {
-    const res = await Coll[options.multi ? "updateMany" : "updateOne"](
-      selector,
-      modifier,
-      options
-    );
-    return res?.modifiedCount;
+  /**
+   * Update documents. Honors options.multi (default true).
+   * Returns modifiedCount (or upsertedCount as fallback).
+   */
+  update(Coll, selector = {}, modifier = {}, options = {}) {
+    const { multi = true, ...rest } = options || {};
+    const p = multi
+      ? Coll.updateMany(selector || {}, modifier || {}, rest)
+      : Coll.updateOne(selector || {}, modifier || {}, rest);
+    return p.then((res) => res?.modifiedCount ?? res?.upsertedCount ?? 0);
   },
 };
