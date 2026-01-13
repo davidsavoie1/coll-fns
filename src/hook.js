@@ -275,8 +275,10 @@ function combineHookDefinitions(hookDefs = []) {
  * @returns {HookFn|undefined} The executable function or undefined if filtered out.
  * @internal
  */
-function runHook(hookDef, ...args) {
+function runHook(hookDef = {}, ...args) {
   const { fn, onError, unless, when } = hookDef;
+
+  if (!isFunc(fn)) return;
 
   /* Wrap the function in a try-catch to potentially prevent errors
    * from propagating to the caller. This is essential for fire-and-forget hooks

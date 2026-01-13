@@ -65,7 +65,8 @@ export function update(
         }),
     (docs) => {
       return then(
-        /* Execute `beforeUpdate` hook if defined */
+        /* Run `beforeUpdate` hook if defined.
+         * Can throw an error to prevent update. */
         isFunc(beforeUpdateHook?.fn) && beforeUpdateHook.fn(docs, modifier),
 
         () => {

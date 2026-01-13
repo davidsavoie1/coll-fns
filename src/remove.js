@@ -50,7 +50,8 @@ export function remove(Coll, selector) {
 
     (docs) => {
       return then(
-        // Run `beforeRemove` if defined
+        /* Run `beforeRemove` if defined.
+         * Can throw an error to prevent removal. */
         isFunc(beforeRemoveHook?.fn) && beforeRemoveHook.fn(docs),
 
         () => {
