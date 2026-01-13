@@ -40,6 +40,10 @@ const DEFAULT_PROTOCOL = {
     throw new Error(`'findList' method must be defined with 'setProtocol'.`);
   },
 
+  getName(/* Coll */) {
+    throw new Error(`'getName' method must be defined with 'setProtocol'.`);
+  },
+
   /* A function that transforms each document defined at the collection level. */
   getTransform(/* Coll */) {
     return undefined;

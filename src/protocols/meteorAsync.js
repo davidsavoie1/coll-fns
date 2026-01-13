@@ -15,6 +15,8 @@ export default {
   findList: (Coll, selector, options) =>
     Coll.find(selector, options).fetchAsync(),
 
+  getName: (Coll) => Coll._name || "",
+
   getTransform: (Coll) => Coll._transform,
 
   insert: (Coll, doc) => Coll.insertAsync(doc),
