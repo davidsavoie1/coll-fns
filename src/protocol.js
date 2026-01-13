@@ -19,6 +19,8 @@
  *   Update matching documents and return the number modified.
  */
 
+import { warn } from "./util";
+
 /**
  * Default protocol that throws for unimplemented methods.
  * Adapters should be provided via setProtocol to override these.
@@ -41,7 +43,8 @@ const DEFAULT_PROTOCOL = {
   },
 
   getName(/* Coll */) {
-    throw new Error(`'getName' method must be defined with 'setProtocol'.`);
+    warn(`'getName' method should be defined with 'setProtocol'.`);
+    return "";
   },
 
   /* A function that transforms each document defined at the collection level. */
