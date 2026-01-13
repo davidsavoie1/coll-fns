@@ -1,3 +1,6 @@
+/* No-op function definition */
+const NOOP = () => {};
+
 /**
  * Return a lowercase JS runtime type string for a value.
  * Examples: 'object', 'array', 'string', 'number', 'function', 'date', 'null', 'undefined'
@@ -80,7 +83,7 @@ export function get2ndLevelFields(modifier) {
         Object.keys(fieldsMap).map((key) => {
           const [rootKey] = key.split(".");
           return rootKey;
-        }),
+        })
       ),
     ];
   });
@@ -98,7 +101,7 @@ export function assign(prev, added) {
   const allKeys = [...new Set([...Object.keys(prev), ...Object.keys(added)])];
   return allKeys.reduce(
     (acc, key) => ({ ...acc, [key]: { ...prev[key], ...added[key] } }),
-    {},
+    {}
   );
 }
 
@@ -190,7 +193,7 @@ export const warn = (...args) =>
 export function combineNoDuplicates(arr1, arr2) {
   return [...arr1, ...arr2].reduce(
     (acc, el) => (acc.includes(el) ? acc : [...acc, el]),
-    [],
+    []
   );
 }
 
@@ -243,7 +246,7 @@ export function getPropValue(dotKey, doc) {
  * @param {(value: any, isAsync: boolean) => R|Promise<R>} fn
  * @returns {R|Promise<R>}
  */
-export function then(maybePromise, fn) {
+export function then(maybePromise, fn = NOOP) {
   /* If `maybePromise` is an array, check if ANY element is a promise. */
   if (isArr(maybePromise)) {
     const arr = maybePromise;
@@ -318,4 +321,16 @@ export function filter(pred, x) {
   /* If not an array, assume a plain object.
    * If not so, will throw an error. */
   return Object.fromEntries(Object.entries(x).filter(pred));
+}
+
+/* Execute a function (potentially async) without awaiting it,
+ * swallowing any internal error
+ * and processing it with error handler when provided. */
+export function fireAndForget(fn, onError) {
+  try {
+    fn();
+  } catch (err) {
+    /* Catch the error and swallow it */
+    if (isFunc(onError)) onError(err);
+  }
 }

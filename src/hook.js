@@ -1,4 +1,5 @@
 import { combineFields } from "./fields";
+import { getProtocol } from "./protocol";
 import { isArr, isFunc, then } from "./util";
 
 /**
@@ -21,6 +22,11 @@ const HOOK_TYPES = [
   "onUpdated", // (doc, before)
   "onRemoved", // (doc)
 ];
+
+/* Hook types that should not rethrow errors to the calling context.
+ * These are fire-and-forget, so throwing might crash the process if unhandled.
+ * They will hence receive a default error handler if not defined by the user. */
+const NO_THROW_HOOK_TYPES = ["onInserted", "onUpdated", "onRemoved"];
 
 /**
  * @typedef {'beforeInsert'|'beforeUpdate'|'beforeRemove'|'onInserted'|'onUpdated'|'onRemoved'} HookType
@@ -47,20 +53,40 @@ const HOOK_TYPES = [
  */
 
 /**
+ * Optional error handler for hooks.
+ * Called when a hook function throws an error (typically in fire-and-forget hooks).
+ * Receives the enhanced hook definition which includes metadata (Coll, collName, hookType).
+ * @typedef {(err:Error, hookDef:EnhancedHookDef) => void} HookErrorHandler
+ */
+
+/**
  * Hook definition object.
- * - before: Only meaningful for "onUpdated". If true, the "before" document should be fetched.
- * - fields: Projection of fields to fetch for the documents the hook needs.
- *           Combined across all hooks of the same type via combineFields.
- *           `undefined` or `true` means "all fields".
- * - fn:     The hook function (required).
- * - unless: Optional predicate; if truthy, prevents the hook from running.
- * - when:   Optional predicate; if truthy, allows the hook to run.
+ * - before:   Only meaningful for "onUpdated". If true, the "before" document should be fetched.
+ * - fields:   Projection of fields to fetch for the documents the hook needs.
+ *             Combined across all hooks of the same type via combineFields.
+ *             `undefined` or `true` means "all fields".
+ * - fn:       The hook function (required).
+ * - onError:  Optional error handler. For non-throwing hook types (onInserted, onUpdated,
+ *             onRemoved), a default handler is provided if not specified.
+ * - unless:   Optional predicate; if truthy, prevents the hook from running.
+ * - when:     Optional predicate; if truthy, allows the hook to run.
  * @typedef {Object} HookDef
  * @property {boolean} [before]
  * @property {import('./fields').FieldSpec|true|undefined} [fields]
  * @property {HookFn} fn
+ * @property {HookErrorHandler} [onError]
  * @property {HookUnlessPredicate} [unless]
  * @property {HookWhenPredicate} [when]
+ */
+
+/**
+ * Enhanced hook definition with internal metadata added by the framework.
+ * Extends user-provided HookDef with:
+ * - Coll: The collection instance
+ * - collName: String name of the collection
+ * - hookType: The hook type (beforeInsert, onInserted, etc.)
+ * - onError: Guaranteed to be defined (user-provided or default handler)
+ * @typedef {HookDef & {Coll: any, collName: string, hookType: HookType, onError: HookErrorHandler}} EnhancedHookDef
  */
 
 /**
@@ -104,7 +130,7 @@ const hooksRegistry = new Map();
  */
 export function hook(
   Coll, // Collection class instance
-  hooksObj, // { ...[hookType]: array of hook definition  }
+  hooksObj // { ...[hookType]: array of hook definition  }
 ) {
   Object.entries(hooksObj).forEach(([hookType, hooks]) => {
     if (!isArr(hooks)) {
@@ -117,6 +143,10 @@ export function hook(
 
 /**
  * Add a hook definition for a given collection and hook type.
+ *
+ * Enhances the hook definition with metadata (Coll, collName, hookType, onError).
+ * For non-throwing hook types (onInserted, onUpdated, onRemoved), attaches a default
+ * error handler that logs to console.error if no custom onError is provided.
  *
  * @template TColl
  * @param {TColl} Coll - Collection class instance.
@@ -134,9 +164,26 @@ function addHookDefinition(Coll, hookType, hookDef) {
     throw new TypeError("'hook' must be a function or contain a 'fn' key");
   }
 
+  const { getName } = getProtocol();
+
   const collHooks = getHookDefinitions(Coll);
   const prevHooks = collHooks[hookType] || [];
-  const nextHooks = [...prevHooks, hookDef];
+
+  const noThrow = NO_THROW_HOOK_TYPES.includes(hookType);
+  const defaultOnError = noThrow ? defaultErrorHandler : undefined;
+
+  /* Enhance hook definition with metadata and default error handling.
+   * For fire-and-forget hooks (onInserted, onUpdated, onRemoved),
+   * a default console error handler is provided unless explicitly overridden. */
+  const enhancedHookDef = {
+    onError: defaultOnError,
+    ...hookDef,
+    Coll,
+    collName: getName(Coll),
+    hookType,
+  };
+
+  const nextHooks = [...prevHooks, enhancedHookDef];
   hooksRegistry.set(Coll, { ...collHooks, [hookType]: nextHooks });
 }
 
@@ -151,7 +198,7 @@ function addHookDefinition(Coll, hookType, hookDef) {
  * @param {HookType} [hookType] - Optional hook type filter.
  * @returns {Record<HookType, HookDef[]>|HookDef[]|undefined} Hook definitions.
  */
-export function getHookDefinitions(Coll, hookType) {
+function getHookDefinitions(Coll, hookType) {
   const collHooks = hooksRegistry.get(Coll) || {};
   if (!hookType) return collHooks;
   return collHooks[hookType];
@@ -198,23 +245,19 @@ function combineHookDefinitions(hookDefs = []) {
         before: acc.before || hookDef.before,
       };
     },
-    { fields: null, before: undefined },
+    { fields: null, before: undefined }
   );
 
-  /* Given the hook type arguments, convert each hook to a handler,
-   * then execute them with the arguments as part of a single promise. */
-  function globalHandler(...args) {
-    const handlers = hookDefs
-      .map((hookDef) => hookToHandler(hookDef, ...args))
-      .filter(isFunc);
-
-    return then(
-      handlers.map((handler) => handler(...args)),
-      (res) => res,
-    );
-  }
-
-  return { fields, fn: globalHandler, before };
+  /* Create a combined hook definition which handler function will
+   * run each hook with the provided arguments.
+   * Hooks are executed for side effects only; their return values are ignored. */
+  return {
+    before,
+    fields,
+    fn(...args) {
+      return then(hookDefs.map((hookDef) => runHook(hookDef, ...args)));
+    },
+  };
 }
 
 /**
@@ -223,20 +266,43 @@ function combineHookDefinitions(hookDefs = []) {
  *
  * - If unless returns truthy, the hook is skipped.
  * - If when is provided and returns falsy, the hook is skipped.
- * - Otherwise returns the hook's fn.
+ * - If an onError handler is defined, wraps the hook function in a try-catch
+ *   to prevent errors from propagating (used for fire-and-forget hooks).
+ * - Otherwise returns the hook's fn unwrapped.
  *
  * @param {HookDef} param0 - Hook definition.
  * @param {...any} args - Arguments the hook would receive.
  * @returns {HookFn|undefined} The executable function or undefined if filtered out.
  * @internal
  */
-function hookToHandler({ fn, unless, when }, ...args) {
-  const prevented = unless?.(...args);
-  if (prevented) return;
+function runHook(hookDef, ...args) {
+  const { fn, onError, unless, when } = hookDef;
 
-  const shouldRun = !when || when(...args);
+  /* Wrap the function in a try-catch to potentially prevent errors
+   * from propagating to the caller. This is essential for fire-and-forget hooks
+   * that should not crash the process. */
+  try {
+    const prevented = unless?.(...args);
+    if (prevented) return;
 
-  if (!shouldRun) return;
+    const shouldRun = !when || when(...args);
 
-  return fn;
+    if (!shouldRun) return;
+
+    return fn(...args);
+  } catch (err) {
+    /* If no error handler is defined, rethrow the error. */
+    if (!isFunc(onError)) throw err;
+
+    /* Otherwise, consider it handled */
+    onError(err, hookDef);
+  }
+}
+
+function defaultErrorHandler(err, { collName, hookType }) {
+  // eslint-disable-next-line no-console
+  console?.error(
+    `Error in '${hookType}' hook of '${collName}' collection:`,
+    err
+  );
 }

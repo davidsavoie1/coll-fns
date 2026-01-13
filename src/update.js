@@ -2,7 +2,7 @@ import { fetchList } from "./fetch";
 import { combineFields } from "./fields";
 import { getHook } from "./hook";
 import { getProtocol } from "./protocol";
-import { indexById, isFunc, then } from "./util";
+import { fireAndForget, indexById, isFunc, then } from "./util";
 
 /**
  * Update documents in a collection with hook support.
@@ -43,7 +43,7 @@ export function update(
   {
     multi = true, // Ensure update targets multiple documents by default.
     ...restOptions
-  } = {},
+  } = {}
 ) {
   const protocol = getProtocol();
 
@@ -86,26 +86,30 @@ export function update(
                 fetchList(
                   Coll,
                   { _id: { $in: Object.keys(beforeById) } },
-                  { fields: onUpdatedHook.fields },
+                  { fields: onUpdatedHook.fields }
                 ),
 
-                /* Pass the before and after versions to each comparator. */
                 (afterDocs) => {
-                  /* Pass each after and before pairs to hook.
+                  /* Pass each after and before pairs to `onUpdated` hook.
                    * Do NOT await, should run asynchronously if protocol allows. */
-                  afterDocs.forEach((after) => {
-                    const before = beforeById[after._id];
-                    onUpdatedHook.fn(after, before);
-                  });
+                  fireAndForget(
+                    () =>
+                      afterDocs.forEach((after) => {
+                        const before = beforeById[after._id];
+                        onUpdatedHook.fn(after, before);
+                      }),
+                    // eslint-disable-next-line no-console
+                    (err) => console?.error("'onUpdated' error:", err)
+                  );
 
                   return updatedCount;
-                },
+                }
               );
-            },
+            }
           );
-        },
+        }
       );
-    },
+    }
   );
 }
 

@@ -2,7 +2,7 @@ import { fetchList } from "./fetch";
 import { combineFields } from "./fields";
 import { getHook } from "./hook";
 import { getProtocol } from "./protocol";
-import { isFunc, then } from "./util";
+import { fireAndForget, isFunc, then } from "./util";
 
 /**
  * Remove documents from a collection with hook support.
@@ -60,13 +60,18 @@ export function remove(Coll, selector) {
           // If removal did nothing or there is no onRemoved hook, return as-is
           if (!removedCount || !isFunc(onRemovedHook?.fn)) return removedCount;
 
-          // Fire-and-forget: pass each (pre-fetched) doc to onRemoved
-          docs.forEach((doc) => onRemovedHook.fn(doc));
+          /* Pass each (pre-fetched) doc to `onRemoved` hook.
+           * Do NOT await, should run asynchronously if protocol allows. */
+          fireAndForget(
+            () => docs.forEach((doc) => onRemovedHook.fn(doc)),
+            // eslint-disable-next-line no-console
+            (err) => console?.error("'onRemoved' error:", err)
+          );
 
           return removedCount;
-        },
+        }
       );
-    },
+    }
   );
 }
 
@@ -88,6 +93,6 @@ function getBeforeFields(...maybeHooks) {
 
   return hookDefs.reduce(
     (fields, hookDef) => combineFields(fields, hookDef.fields),
-    null,
+    null
   );
 }

@@ -1,7 +1,7 @@
 import { fetchOne } from "./fetch";
 import { getHook } from "./hook";
 import { getProtocol } from "./protocol";
-import { isFunc, then } from "./util";
+import { fireAndForget, isFunc, then } from "./util";
 
 /**
  * Insert a document into a collection with hook support.
@@ -37,7 +37,8 @@ export function insert(Coll, doc) {
   const beforeInsertHook = getHook(Coll, "beforeInsert");
 
   return then(
-    // Run `beforeInsert` if present (may mutate/validate doc)
+    /* Run `beforeInsert` if present (may mutate/validate doc).
+     * Can throw an error to prevent insertion. */
     isFunc(beforeInsertHook?.fn) && beforeInsertHook.fn(doc),
 
     () => {
@@ -61,13 +62,19 @@ export function insert(Coll, doc) {
             _idOnly ? { _id } : fetchOne(Coll, { _id }, { fields }),
 
             (insertedDoc) => {
-              // Fire-and-forget: don't await onInserted
-              onInserted(insertedDoc);
+              /* Pass inserted doc to `onInserted` hook.
+               * Do NOT await, should run asynchronously if protocol allows. */
+              fireAndForget(
+                () => onInserted(insertedDoc),
+                // eslint-disable-next-line no-console
+                (err) => console?.error("'onInserted' error:", err)
+              );
+
               return _id;
-            },
+            }
           );
-        },
+        }
       );
-    },
+    }
   );
 }
