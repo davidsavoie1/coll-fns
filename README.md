@@ -1,22 +1,24 @@
 # coll-fns
 
-A universal collection manipulation library that provides a unified API for working with different database backends through a protocol-based architecture.
+Work with MongoDB collections using declarative joins and reusable hooks—fetch related docs without boilerplate and keep cross-collection logic in one place.
 
 ## Overview
 
-`coll-fns` abstracts common database operations (CRUD, joins, field projections) behind a consistent interface, allowing you to write database-agnostic code that works across MongoDB, Meteor, and other data sources.
+Skip the repetitive glue code for joining collections and wiring related data. Define your relationships once, then ask for only the fields you need in a nested tree at query time. You keep flexibility (less denormalization needed) while still fetching children efficiently—often better than ad-hoc code copied across endpoints.
 
-**Originally designed for Meteor**, `coll-fns` solves the challenge of writing isomorphic database code that works seamlessly on both client (synchronous) and server (asynchronous) with the exact same API.
+Hooks let you centralize cross-collection side effects and validations (e.g., propagate changes, enforce rules) so you don't repeat that logic in every mutation path.
+
+**Works identically on Meteor server (async) and client (sync)** with the same code, and supports any MongoDB-compatible backend you plug in.
 
 ## Key Features
 
-- 🔗 **Powerful Join System**: Define relationships between collections with automatic field resolution and nested joins
-- 🪝 **Extensible Hooks**: React to CRUD operations with before/after hooks for validation, transformation, and side effects
-- 🌐 **Isomorphic by Design**: Write once, run anywhere - same API for client-side (sync) and server-side (async) code
-- 🔌 **Protocol-based Architecture**: Switch between different database backends seamlessly
-- 📊 **Advanced Field Projections**: Support for nested fields, dot notation, and MongoDB-style projections
-- 🔄 **Promise/async Support**: Works with both synchronous and asynchronous protocols
-- 📝 **TypeScript-ready**: Includes JSDoc types for better IDE support
+- **Powerful Join System**: Define relationships between collections with automatic field resolution and nested joins
+- **Extensible Hooks**: React to CRUD operations with before/after hooks for validation, transformation, and side effects
+- **Isomorphic by Design**: Write once, run anywhere - same API for client-side (sync) and server-side (async) code
+- **Protocol-based Architecture**: Switch between different database backends seamlessly
+- **Advanced Field Projections**: Support for nested fields, dot notation, and MongoDB-style projections
+- **Promise/async Support**: Works with both synchronous and asynchronous protocols
+- **TypeScript-ready**: Includes JSDoc types for better IDE support
 
 ## Installation
 
@@ -34,6 +36,7 @@ import {
   update,
   remove,
   count,
+  join,
   protocols,
 } from "coll-fns";
 
@@ -46,11 +49,74 @@ await insert(UsersCollection, { name: "Alice", age: 25 });
 await update(UsersCollection, { name: "Alice" }, { $set: { age: 26 } });
 const total = await count(UsersCollection, {});
 await remove(UsersCollection, { name: "Alice" });
+
+// Define a join to fetch authors with posts
+join(PostsCollection, {
+  author: {
+    Coll: UsersCollection,
+    on: ["authorId", "_id"],
+    single: true,
+  },
+});
+
+// Use the join in a fetch
+const posts = await fetchList(
+  PostsCollection,
+  {},
+  {
+    fields: {
+      title: 1,
+      content: 1,
+      "+": { author: 1 },
+    },
+  }
+);
+// Result: Each post includes its author's name and email
 ```
 
 ## Joins: The Power Feature
 
 One of the most powerful features of `coll-fns` is its ability to define declarative joins between collections, eliminating the need for manual data fetching and aggregation.
+
+Joins must be **pre-registered globally** for a collection using the `join()` function. Once defined, they're available for all fetch operations on that collection.
+
+### Defining and Using Joins
+
+Register joins once (typically during initialization) and reference them in fetch calls:
+
+```js
+import { join, fetchList } from "coll-fns";
+
+// Define joins globally for a collection (usually in initialization code)
+join(PostsCollection, {
+  author: {
+    Coll: UsersCollection,
+    on: ["authorId", "_id"],
+    single: true,
+  },
+  comments: {
+    Coll: CommentsCollection,
+    on: ["_id", "postId"],
+  },
+});
+
+// Now use fetch without re-specifying the join definitions
+const posts = await fetchList(
+  PostsCollection,
+  { status: "published" },
+  {
+    fields: {
+      title: 1,
+      content: 1,
+      "+": { author: 1, comments: 1 }, // Reference pre-defined joins
+    },
+  }
+);
+
+// Result: Each post includes author and comments as defined
+```
+
+**Note on `fields` in join definitions:** The optional `fields` property within a join definition specifies which fields of the _joined_ collection to include. It's particularly useful when using function-based joins (where `on` is a function) because the parent document may not have all required linking keys fetched by default. For simple array-based joins, `fields` is optional — omit it to fetch all fields from the joined collection.
 
 ### Basic Join Example
 
@@ -59,13 +125,6 @@ const posts = await fetchList(
   PostsCollection,
   {},
   {
-    joins: {
-      author: {
-        coll: UsersCollection,
-        on: ["authorId", "_id"], // [local field, foreign field]
-        fields: { name: 1, avatar: 1, email: 1 },
-      },
-    },
     fields: {
       title: 1,
       content: 1,
@@ -75,23 +134,29 @@ const posts = await fetchList(
 );
 
 // Result: Each post includes an 'author' object with name, avatar, and email
+// (assuming 'author' was pre-registered via join(PostsCollection, { author: { ... } }))
 ```
 
 ### One-to-Many Joins
 
 ```js
+import { join, fetchList } from "coll-fns";
+
+// Pre-register the join
+join(PostsCollection, {
+  comments: {
+    Coll: CommentsCollection,
+    on: ["_id", "postId"],
+    // Note: 'single' defaults to false, so joined docs are returned as an array
+    fields: { text: 1, createdAt: 1 },
+  },
+});
+
+// Use in fetch
 const posts = await fetchList(
   PostsCollection,
   {},
   {
-    joins: {
-      comments: {
-        coll: CommentsCollection,
-        on: ["_id", "postId"],
-        many: true, // Returns an array of related documents
-        fields: { text: 1, createdAt: 1 },
-      },
-    },
     fields: {
       title: 1,
       "+": { comments: 1 },
@@ -104,33 +169,41 @@ const posts = await fetchList(
 
 ### Nested Joins
 
-Joins can be nested to fetch deeply related data:
+Joins can be nested to fetch deeply related data. Register all joins upfront:
 
 ```js
+import { join, fetchList } from "coll-fns";
+
+// Pre-register joins for PostsCollection
+join(PostsCollection, {
+  author: {
+    Coll: UsersCollection,
+    on: ["authorId", "_id"],
+    single: true,
+    fields: { name: 1, avatar: 1 },
+  },
+  comments: {
+    Coll: CommentsCollection,
+    on: ["_id", "postId"],
+    fields: { text: 1, "+": { user: 1 } },
+  },
+});
+
+// Pre-register joins for CommentsCollection
+join(CommentsCollection, {
+  user: {
+    Coll: UsersCollection,
+    on: ["userId", "_id"],
+    single: true,
+    fields: { name: 1, avatar: 1 },
+  },
+});
+
+// Use in fetch - nested joins are resolved automatically
 const posts = await fetchList(
   PostsCollection,
   {},
   {
-    joins: {
-      author: {
-        coll: UsersCollection,
-        on: ["authorId", "_id"],
-        fields: { name: 1, avatar: 1 },
-      },
-      comments: {
-        coll: CommentsCollection,
-        on: ["_id", "postId"],
-        many: true,
-        fields: { text: 1, "+": { user: 1 } },
-        joins: {
-          user: {
-            coll: UsersCollection,
-            on: ["userId", "_id"],
-            fields: { name: 1, avatar: 1 },
-          },
-        },
-      },
-    },
     fields: {
       title: 1,
       content: 1,
@@ -147,28 +220,55 @@ const posts = await fetchList(
 Control the depth of recursive joins to prevent infinite loops:
 
 ```js
+import { join, fetchList } from "coll-fns";
+
+// Pre-register recursive join
+join(UsersCollection, {
+  friends: {
+    Coll: UsersCollection,
+    on: ["friendIds", "_id"],
+  },
+});
+
+// Use in fetch - specify depth in fields with '+' prefix
 const users = await fetchList(
   UsersCollection,
   {},
   {
-    joins: {
-      friends: {
-        coll: UsersCollection,
-        on: ["friendIds", "_id"],
-        many: true,
-        fields: { name: 1, "+": { friends: 1 } },
-        joins: {
-          friends: {
-            coll: UsersCollection,
-            on: ["friendIds", "_id"],
-            many: true,
-          },
-        },
-      },
-    },
     fields: {
       name: 1,
       "+": { friends: 2 }, // Limit to 2 levels deep
+    },
+  }
+);
+```
+
+### Function-Based Joins with `fields`
+
+When using function-based joins (where `on` is a function), the `fields` property declares which fields the parent document needs for the join to work:
+
+```js
+import { join, fetchList } from "coll-fns";
+
+// Join comments where the parent doc's userId field is used to compute the selector
+join(PostsCollection, {
+  userComments: {
+    Coll: CommentsCollection,
+    // Function form: receives parent doc, returns selector for joined collection
+    on: (post) => ({ userId: post.userId, postId: post._id }),
+    // Declare which parent fields are required for the join function
+    fields: { userId: 1 },
+  },
+});
+
+// Use in fetch
+const posts = await fetchList(
+  PostsCollection,
+  {},
+  {
+    fields: {
+      title: 1,
+      "+": { userComments: 1 },
     },
   }
 );
@@ -282,6 +382,180 @@ hook(UsersCollection, "update", "after", (result, selector, modifier) => {
 });
 ```
 
+## Error Handling
+
+`coll-fns` provides multiple mechanisms for handling errors in database operations and validations.
+
+### Throwing Errors in Hooks
+
+Hooks can throw errors to prevent operations from completing. This is useful for validation, authorization checks, and data integrity:
+
+```js
+import { hook } from "coll-fns";
+
+// Prevent invalid operations by throwing in before hooks
+hook(UsersCollection, "insert", "before", (doc) => {
+  if (!doc.email || !doc.email.includes("@")) {
+    throw new Error("Invalid email format");
+  }
+  return doc;
+});
+
+// Usage
+try {
+  await insert(UsersCollection, { name: "John", email: "invalid" });
+} catch (error) {
+  console.error("Insert failed:", error.message);
+  // Output: Insert failed: Invalid email format
+}
+```
+
+### Async/Await Error Handling
+
+All operations support both sync and async protocols. Use standard try/catch for async operations:
+
+```js
+import { fetchList, update, remove } from "coll-fns";
+
+async function safeUpdatePosts() {
+  try {
+    const posts = await fetchList(PostsCollection, { status: "draft" });
+    console.log(`Found ${posts.length} draft posts`);
+
+    for (const post of posts) {
+      await update(
+        PostsCollection,
+        { _id: post._id },
+        { $set: { status: "published" } }
+      );
+    }
+  } catch (error) {
+    console.error("Update operation failed:", error);
+    // Handle database error, network issue, validation error, etc.
+  }
+}
+```
+
+### Join Validation Errors
+
+Joins are validated when registered globally. Invalid join definitions throw errors immediately:
+
+```js
+import { join } from "coll-fns";
+
+try {
+  // Missing required 'Coll' property
+  join(PostsCollection, {
+    author: {
+      on: ["authorId", "_id"], // Error: Missing Coll
+    },
+  });
+} catch (error) {
+  console.error(error.message);
+  // Output: Collection 'Coll' for 'author' join is required.
+}
+
+try {
+  // Missing required 'on' condition
+  join(PostsCollection, {
+    comments: {
+      Coll: CommentsCollection,
+      // Error: Missing on
+    },
+  });
+} catch (error) {
+  console.error(error.message);
+  // Output: Join 'comments' has no 'on' condition specified.
+}
+```
+
+### Authorization in Hooks
+
+Use hooks to enforce authorization rules and throw errors for unauthorized operations:
+
+```js
+hook(PostsCollection, "update", "before", (selector, modifier, options) => {
+  const currentUserId = getCurrentUserId();
+  const [post] = fetchOne(PostsCollection, selector);
+
+  if (!post) {
+    throw new Error("Post not found");
+  }
+
+  if (post.authorId !== currentUserId) {
+    throw new Error("Unauthorized: You can only edit your own posts");
+  }
+
+  return [selector, modifier, options];
+});
+
+// Usage
+try {
+  await update(
+    PostsCollection,
+    { _id: "123" },
+    { $set: { title: "New Title" } }
+  );
+} catch (error) {
+  if (error.message.includes("Unauthorized")) {
+    // Handle authorization error
+  } else if (error.message === "Post not found") {
+    // Handle not found error
+  }
+}
+```
+
+### Handling Join Fetch Errors
+
+When joins fail during fetch operations, errors propagate through the promise chain:
+
+```js
+import { join, fetchList } from "coll-fns";
+
+// Pre-register the join
+join(PostsCollection, {
+  author: {
+    Coll: UsersCollection,
+    on: ["authorId", "_id"],
+    single: true,
+  },
+});
+
+// Use in fetch
+try {
+  const posts = await fetchList(
+    PostsCollection,
+    {},
+    {
+      fields: { title: 1, "+": { author: 1 } },
+    }
+  );
+} catch (error) {
+  console.error("Failed to fetch posts with authors:", error);
+  // Errors from nested joins are propagated here
+}
+```
+
+### Protocol-Level Error Handling
+
+When a protocol method is not implemented, `coll-fns` throws a descriptive error:
+
+```js
+import { setProtocol, fetchList } from "coll-fns";
+
+// Using incomplete protocol
+setProtocol({
+  // Missing required methods
+});
+
+try {
+  await fetchList(SomeCollection, {});
+} catch (error) {
+  console.error(error.message);
+  // Output: 'findList' method must be defined with 'setProtocol'.
+}
+```
+
 ## Meteor Integration: Isomorphic by Design
 
 `coll-fns` was specifically designed to solve Meteor's challenge of writing code that works both on the client (synchronous) and server (asynchronous) with the same API.
@@ -311,23 +585,24 @@ Meteor.methods({
 
 ```js
 // client/main.js
-import { setProtocol, protocols } from "coll-fns";
+import { setProtocol, protocols, join } from "coll-fns";
 
 setProtocol(protocols.meteorSync);
+
+// Pre-register joins (same as server)
+join(PostsCollection, {
+  author: {
+    Coll: UsersCollection,
+    on: ["authorId", "_id"],
+    single: true,
+  },
+});
 
 // Same API, synchronous execution
 const posts = fetchList(
   PostsCollection,
   {},
-  {
-    joins: {
-      author: {
-        coll: UsersCollection,
-        on: ["authorId", "_id"],
-      },
-    },
-    fields: { title: 1, "+": { author: 1 } },
-  }
+  { fields: { title: 1, "+": { author: 1 } } }
 );
 ```
 
@@ -335,7 +610,17 @@ const posts = fetchList(
 
 ```js
 // imports/api/posts.js
-import { fetchList } from "coll-fns";
+import { join, fetchList } from "coll-fns";
+
+// Pre-register joins once
+join(PostsCollection, {
+  author: {
+    Coll: UsersCollection,
+    on: ["authorId", "_id"],
+    single: true,
+    fields: { name: 1, avatar: 1 },
+  },
+});
 
 // This function works on both client and server!
 export function getPostsWithAuthors() {
@@ -343,14 +628,11 @@ export function getPostsWithAuthors() {
     PostsCollection,
     {},
     {
-      joins: {
-        author: {
-          coll: UsersCollection,
-          on: ["authorId", "_id"],
-          fields: { name: 1, avatar: 1 },
-        },
+      fields: {
+        title: 1,
+        content: 1,
+        "+": { author: 1 },
       },
-      fields: { title: 1, content: 1, "+": { author: 1 } },
     }
   );
 }
@@ -383,7 +665,6 @@ const users = await fetchList(
 - `sort`: Sort specification
 - `limit`: Maximum number of documents
 - `skip`: Number of documents to skip
-- `joins`: Join definitions for related collections
 
 #### `fetchOne(collection, selector, options)`
 

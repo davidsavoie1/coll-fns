@@ -23,7 +23,6 @@ import {
  * @property {number} [limit] - Max number of documents to return.
  * @property {number} [skip] - Number of documents to skip.
  * @property {Function} [transform] - Document transform function. If omitted, protocol getTransform(Coll) is used.
- * @property {Object} [joins] - Optional per-call join overrides (usually joins come from getJoins(Coll)).
  *
  * @typedef {Object} JoinDef
  * @property {*} Coll - Target collection of the join.
@@ -39,7 +38,7 @@ import {
 /**
  * Retrieve documents of a collection, with optional joined subdocuments.
  * - Fields accept nested objects; dot-notation is normalized internally.
- * - Joins are defined via getJoins(Coll). Join usage is controlled through '+' in fields.
+ * - Joins are pre-registered via join(Coll, joinDefinitions). Join usage is controlled through '+' in fields.
  * - Works with both sync and async protocols.
  *
  * @template TColl
@@ -80,7 +79,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
         fields: ownFields,
         transform: null,
       }),
-      (docs) => docs.map(enhance),
+      (docs) => docs.map(enhance)
     );
   }
 
@@ -156,7 +155,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
                 // Determine whether we need to include toProp explicitly in subFields
                 const { _: own } = dispatchFields(
                   subJoinFields,
-                  getJoins(joinColl) || {},
+                  getJoins(joinColl) || {}
                 );
 
                 const allOwnIncluded = !own || Object.keys(own).length <= 0;
@@ -219,8 +218,8 @@ export function fetchList(Coll, selector = {}, options = {}) {
                         joinedDocs = uniqueBy(
                           "_id",
                           fromValues.flatMap(
-                            (fromValue) => indexedByToProp[fromValue] || [],
-                          ),
+                            (fromValue) => indexedByToProp[fromValue] || []
+                          )
                         );
                       } else {
                         // Both scalar
@@ -234,9 +233,9 @@ export function fetchList(Coll, selector = {}, options = {}) {
                         : raw;
                       return { ...doc, [_key]: afterPostFetch };
                     });
-                  },
+                  }
                 );
-              },
+              }
             );
           });
         }, docs),
@@ -263,7 +262,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
                 docsWithArrJoins.map((doc) => {
                   const docWithObjJoins = objJoinsEnhancers.reduce(
                     (_doc, fn) => fn(_doc),
-                    doc,
+                    doc
                   );
 
                   return then(
@@ -283,22 +282,22 @@ export function fetchList(Coll, selector = {}, options = {}) {
                           }),
                         ],
 
-                        ([_doc, joinFetcher]) => joinFetcher(_doc),
+                        ([_doc, joinFetcher]) => joinFetcher(_doc)
                       );
                     }, docWithObjJoins),
 
                     // Re-apply transform after all joins
-                    (docWithFnJoins) => enhance(docWithFnJoins),
+                    (docWithFnJoins) => enhance(docWithFnJoins)
                   );
                 }),
 
-                (res) => res,
+                (res) => res
               );
-            },
+            }
           );
-        },
+        }
       );
-    },
+    }
   );
 }
 
@@ -314,7 +313,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
 export function fetchOne(Coll, selector, options = {}) {
   return then(
     fetchList(Coll, selector, { ...options, limit: 1 }),
-    (res) => res[0],
+    (res) => res[0]
   );
 }
 
@@ -330,7 +329,7 @@ export function fetchOne(Coll, selector, options = {}) {
 export function fetchIds(Coll, selector, options) {
   return then(
     fetchList(Coll, selector, { ...options, fields: { _id: 1 } }),
-    (res) => pluckIds(res),
+    (res) => pluckIds(res)
   );
 }
 
@@ -347,7 +346,7 @@ export function exists(Coll, selector) {
     // Limit to _id field to ensure minimal data
     fetchOne(Coll, selector, { fields: { _id: 1 } }),
 
-    (doc) => !!doc,
+    (doc) => !!doc
   );
 }
 
@@ -432,8 +431,8 @@ function createJoinFetcher({
               : raw;
             return { ...doc, [_key]: afterPostFetch };
           };
-        },
+        }
       );
-    },
+    }
   );
 }
