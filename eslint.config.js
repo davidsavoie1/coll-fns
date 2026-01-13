@@ -1,19 +1,22 @@
+import globals from "globals";
+import js from "@eslint/js";
 import prettier from "eslint-config-prettier";
 
 export default [
   {
     ignores: ["dist", "node_modules"],
-    parserOptions: {
-      ecmaVersion: 2020,
+    languageOptions: {
+      ecmaVersion: "latest",
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
       sourceType: "module",
     },
   },
+  js.configs.recommended,
   {
     files: ["src/**/*.js"],
-    languageOptions: {
-      sourceType: "module",
-      ecmaVersion: "latest",
-    },
     rules: {
       "no-console": "warn",
       "no-unused-vars": ["error", { ignoreRestSiblings: true }],
