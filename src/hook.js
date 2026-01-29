@@ -1,5 +1,4 @@
 import { combineFields } from "./fields";
-import { getProtocol } from "./protocol";
 import { isArr, isFunc, then } from "./util";
 
 /**
@@ -164,8 +163,6 @@ function addHookDefinition(Coll, hookType, hookDef) {
     throw new TypeError("'hook' must be a function or contain a 'fn' key");
   }
 
-  const { getName } = getProtocol();
-
   const collHooks = getHookDefinitions(Coll);
   const prevHooks = collHooks[hookType] || [];
 
@@ -179,7 +176,6 @@ function addHookDefinition(Coll, hookType, hookDef) {
     onError: defaultOnError,
     ...hookDef,
     Coll,
-    collName: getName(Coll),
     hookType,
   };
 

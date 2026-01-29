@@ -1,11 +1,7 @@
 export default {
   count: (Coll, selector, options) => Coll.find(selector, options).count(),
 
-  cursor: (Coll, selector, options) => Coll.find(selector, options),
-
   findList: (Coll, selector, options) => Coll.find(selector, options).fetch(),
-
-  getName: (Coll) => Coll._name || "",
 
   getTransform: (Coll) => Coll._transform,
 

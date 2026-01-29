@@ -14,26 +14,12 @@ export default {
   },
 
   /**
-   * Return a MongoDB FindCursor for advanced usage.
-   * Maps fields -> projection.
-   */
-  cursor(Coll, selector = {}, options = {}) {
-    const renamedOptions = renameKeys({ fields: "projection" }, options || {});
-    return Coll.find(selector || {}, renamedOptions);
-  },
-
-  /**
    * Return an array of documents for selector/options.
    */
   findList(Coll, selector = {}, options = {}) {
     const renamedOptions = renameKeys({ fields: "projection" }, options || {});
     return Coll.find(selector || {}, renamedOptions).toArray();
   },
-
-  /**
-   * Return the collection's name. Defaults to empty string.
-   */
-  getName: (Coll) => Coll.collectionName || "",
 
   /**
    * Optional per-collection transform; expose Coll.transform if present.

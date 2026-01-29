@@ -10,12 +10,8 @@ export default {
     return Coll.find(selector, options).countAsync();
   },
 
-  cursor: (Coll, selector, options) => Coll.find(selector, options),
-
   findList: (Coll, selector, options) =>
     Coll.find(selector, options).fetchAsync(),
-
-  getName: (Coll) => Coll._name || "",
 
   getTransform: (Coll) => Coll._transform,
 

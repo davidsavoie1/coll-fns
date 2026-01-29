@@ -5,8 +5,6 @@
  * @typedef {Object} Protocol
  * @property {(Coll:any, selector?:Object, options?:Object) => number|Promise<number>} count
  *   Count documents matching selector.
- * @property {(Coll:any, selector?:Object, options?:Object) => any} cursor
- *   Return a driver-specific cursor/iterator for advanced usage.
  * @property {(Coll:any, selector?:Object, options?:Object) => Array|Promise<Array>} findList
  *   Return an array of documents for selector/options.
  * @property {(Coll:any) => ((doc:any)=>any)|undefined} getTransform
@@ -19,8 +17,6 @@
  *   Update matching documents and return the number modified.
  */
 
-import { warn } from "./util";
-
 /**
  * Default protocol that throws for unimplemented methods.
  * Adapters should be provided via setProtocol to override these.
@@ -28,41 +24,36 @@ import { warn } from "./util";
  * @internal
  */
 const DEFAULT_PROTOCOL = {
+  /* Return a documents count */
   count(/* Coll, selector = {}, options = {} */) {
     throw new Error(`'count' method must be defined with 'setProtocol'.`);
   },
 
-  cursor(/* Coll, selector = {}, options = {} */) {
-    throw new Error(`'cursor' method must be defined with 'setProtocol'.`);
-  },
-
-  /* A function that takes a collection, selector and options
-   * and returns a list of documents. */
+  /* Return a list of documents. */
   findList(/* Coll, selector = {}, options = {} */) {
     throw new Error(`'findList' method must be defined with 'setProtocol'.`);
   },
 
-  getName(/* Coll */) {
-    warn(`'getName' method should be defined with 'setProtocol'.`);
-    return "";
-  },
-
-  /* A function that transforms each document defined at the collection level. */
+  /* Optional. Return a function that will transform each document
+   * after being fetched with descendants. */
   getTransform(/* Coll */) {
     return undefined;
   },
 
-  /* A function that inserts a doc in a collection and returns the inserted _id. */
+  /* Insert a document in a collection
+   * and return the inserted _id. */
   insert(/* Coll, doc, options */) {
     throw new Error(`'insert' method must be defined with 'setProtocol'.`);
   },
 
-  /* A function that removes docs in a collection and returns the number of removed documents. */
+  /* Remove documents in a collection
+   * and return the number of removed documents. */
   remove(/* Coll, selector, options */) {
     throw new Error(`'remove' method must be defined with 'setProtocol'.`);
   },
 
-  /* A function that updates docs in a collection and returns the number of modified documents. */
+  /* Update documents in a collection
+   * and return the number of modified documents. */
   update(/* Coll, selector, modifier, options */) {
     throw new Error(`'update' method must be defined with 'setProtocol'.`);
   },
@@ -70,7 +61,7 @@ const DEFAULT_PROTOCOL = {
 
 /**
  * The active protocol used by all high-level operations.
- * Initialized with DEFAULT_PROTOCOL and overridden via setProtocol/updateProtocol.
+ * Initialized with DEFAULT_PROTOCOL and overridden via setProtocol.
  * @type {Protocol}
  * @internal
  */
