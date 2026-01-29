@@ -110,24 +110,3 @@ export function getProtocol(overload) {
 export function setProtocol(methods = {}) {
   protocol = { ...DEFAULT_PROTOCOL, ...methods };
 }
-
-/**
- * Mutate the current protocol.
- * - If passed a function, it receives the current protocol and must return the next protocol.
- * - If passed a partial object, it shallow-merges over the current protocol.
- *
- * @param {((p:Protocol)=>Protocol)|Partial<Protocol>} fnOrMethods
- * @example
- * // Merge additional methods
- * updateProtocol({ getTransform: () => (d) => d });
- *
- * @example
- * // Wrap existing behavior
- * updateProtocol((p) => ({ ...p, count: (...args) => withMetrics('count', () => p.count(...args)) }));
- */
-export function updateProtocol(fnOrMethods) {
-  protocol =
-    typeof fnOrMethods === "function"
-      ? fnOrMethods(protocol)
-      : { ...protocol, ...fnOrMethods };
-}
