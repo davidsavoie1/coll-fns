@@ -17,7 +17,7 @@ const knownTypesCaption = KNOWN_TYPES.join("', '");
  * @type {Map<*, Record<string, JoinDef>|undefined>}
  * @internal
  */
-let joinsDictionnary = new Map();
+let joinsDictionary = new Map();
 
 /**
  * Optional prefix used to distinguish join fields within the `fields` option.
@@ -93,7 +93,7 @@ let joinPrefix = null;
 export function join(Collection, joins) {
   if (!joins) {
     // Explicitly set to undefined to signal no joins for this collection
-    joinsDictionnary.set(Collection, undefined);
+    joinsDictionary.set(Collection, undefined);
     return;
   }
 
@@ -117,14 +117,14 @@ export function join(Collection, joins) {
     // Encourage declaring the base fields required so callers don't forget them.
     if (isFunc(on) && !fields) {
       warn(
-        `Join '${key}' is defined with a function 'on', but no 'fields' are explicitely specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`,
+        `Join '${key}' is defined with a function 'on', but no 'fields' are explicitly specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`,
       );
     }
   });
 
   // Merge new join defs with existing ones on this collection
-  joinsDictionnary.set(Collection, {
-    ...joinsDictionnary.get(Collection),
+  joinsDictionary.set(Collection, {
+    ...joinsDictionary.get(Collection),
     ...joins,
   });
 }
@@ -137,7 +137,7 @@ export function join(Collection, joins) {
  * @returns {Record<string, JoinDef>} The join definitions keyed by join name.
  */
 export function getJoins(Coll) {
-  return joinsDictionnary.get(Coll) || {};
+  return joinsDictionary.get(Coll) || {};
 }
 
 /**

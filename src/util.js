@@ -130,12 +130,12 @@ export function includesSome(searchedArr, sourceArr) {
 /**
  * Rename object keys using a dictionary mapping.
  * Keys not present in the dictionary are preserved.
- * @param {Record<string, string>} dictionnary
+ * @param {Record<string, string>} dictionary
  * @param {Record<string, any>} object
  * @returns {Record<string, any>}
  */
-export function renameKeys(dictionnary, object) {
-  return map(([k, v]) => [dictionnary[k] || k, v], object);
+export function renameKeys(dictionary, object) {
+  return map(([k, v]) => [dictionary[k] || k, v], object);
 }
 
 /**

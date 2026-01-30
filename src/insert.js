@@ -7,7 +7,7 @@ import { fireAndForget, isFunc, then } from "./util";
  * Insert a document into a collection with hook support.
  *
  * Execution flow (sync or async depending on the active protocol):
- * 1) Run `beforeInsert` hook if defined: can validate/mutate the doc.
+ * 1) Run `beforeInsert` hook if defined: can validate the doc.
  * 2) Call protocol.insert(Coll, doc) to perform the insertion.
  * 3) Run `onInserted` hook if defined:
  *    - If the hook requests only {_id: 1}, pass {_id} directly.
@@ -26,11 +26,6 @@ import { fireAndForget, isFunc, then } from "./util";
  * @example
  * // Basic usage
  * const _id = await insert(Users, { name: 'Alice', email: 'a@ex.com' });
- *
- * @example
- * // With hooks configured elsewhere
- * // beforeInsert could normalize fields; onInserted could enqueue a job
- * const userId = await insert(Users, payload);
  */
 export function insert(Coll, doc) {
   const protocol = getProtocol();
