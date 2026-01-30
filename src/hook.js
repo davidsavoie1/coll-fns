@@ -1,4 +1,5 @@
 import { combineFields } from "./fields";
+import { getProtocol } from "./protocol";
 import { isArr, isFunc, then } from "./util";
 
 /**
@@ -96,16 +97,6 @@ const NO_THROW_HOOK_TYPES = ["onInserted", "onUpdated", "onRemoved"];
  */
 const hooksRegistry = new Map();
 
-/*
- *  hookDef = {
- *    before, // Bool. onUpdated only. When true, fetch document before update. Otherwise, document will be fetched, but only with its _id field to know which docs to retrieve after the update.
- *    fields, // Fields of document to fetch. Will be combined for all hooks of the same type. `undefined` or `true` means all fields and subsequent field restrictions won't apply.
- *    fn, // (doc, before<onUpdated>) => side effect. Function to run as hook
- *    unless, // (doc, before<onUpdated>) => bool. Predicate to prevent hook from running
- *    when, // (doc, before<onUpdated>) => bool. Predicate to run the hook
- *  };
- */
-
 /**
  * Register multiple hooks for a collection.
  * The hooksObj keys must be valid HookType values, and each value must be an array of HookDef.
@@ -117,13 +108,13 @@ const hooksRegistry = new Map();
  * @example
  * hook(Users, {
  *   beforeInsert: [{
- *     fields: { email: 1 },
  *     fn(doc) {
  *       if (!doc.email) throw new Error('Email required');
  *     }
  *   }],
  *   onInserted: [{
- *     fn(doc) { console.log('Inserted user', doc._id); }
+ *     fields: { email: 1 },
+ *     fn(doc) { console.log('Inserted user', doc); }
  *   }]
  * });
  */
@@ -163,6 +154,8 @@ function addHookDefinition(Coll, hookType, hookDef) {
     throw new TypeError("'hook' must be a function or contain a 'fn' key");
   }
 
+  const { getName } = getProtocol();
+
   const collHooks = getHookDefinitions(Coll);
   const prevHooks = collHooks[hookType] || [];
 
@@ -176,6 +169,7 @@ function addHookDefinition(Coll, hookType, hookDef) {
     onError: defaultOnError,
     ...hookDef,
     Coll,
+    collName: getName(Coll),
     hookType,
   };
 

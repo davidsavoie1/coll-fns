@@ -34,6 +34,12 @@ const DEFAULT_PROTOCOL = {
     throw new Error(`'findList' method must be defined with 'setProtocol'.`);
   },
 
+  /* Return the name of the collection.
+   * Defaults to empty string, since not critical. */
+  getName(/* Coll */) {
+    return "";
+  },
+
   /* Optional. Return a function that will transform each document
    * after being fetched with descendants. */
   getTransform(/* Coll */) {

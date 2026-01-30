@@ -22,6 +22,11 @@ export default {
   },
 
   /**
+   * Return the collection's name. Defaults to empty string.
+   */
+  getName: (Coll) => Coll.collectionName || "",
+
+  /**
    * Optional per-collection transform; expose Coll.transform if present.
    */
   getTransform(Coll) {
