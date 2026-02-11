@@ -1,3 +1,9 @@
+# NEXT
+
+- Improve after hooks error handling documentation;
+
+---
+
 # 1.2.0 - 2026-01-30
 
 - BREAK | Remove `getProtocol` exported method (assumed it probably wasn't used much);

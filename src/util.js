@@ -327,10 +327,12 @@ export function filter(pred, x) {
  * swallowing any internal error
  * and processing it with error handler when provided. */
 export function fireAndForget(fn, onError) {
-  try {
-    fn();
-  } catch (err) {
-    /* Catch the error and swallow it */
-    if (isFunc(onError)) onError(err);
-  }
+  queueMicrotask(async () => {
+    try {
+      await fn();
+    } catch (err) {
+      /* Catch the error and swallow it */
+      if (isFunc(onError)) onError(err);
+    }
+  });
 }

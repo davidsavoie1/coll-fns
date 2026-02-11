@@ -947,11 +947,56 @@ Although arguments can be mutated, it is not the main purpose of these hooks. Mu
 
 ### After hooks
 
-These hooks run **after** the write operation completes and are **fire-and-forget** (not awaited). They should not throw errors that should get back to the caller.
+These hooks run **after** the write operation completes and are **fire-and-forget** (not awaited by the caller of the collection function). They are usually used to trigger side-effects. They should not throw errors that should get back to the caller.
 
 - **`onInserted`**: Runs after a document is inserted. Receives `(doc)`.
 - **`onUpdated`**: Runs after a document is updated. Receives `(afterDoc, beforeDoc)`.
 - **`onRemoved`**: Runs after a document is removed. Receives `(doc)`.
+
+**IMPORTANT!**
+
+1. These hooks **might create incoherent state** when used as a denormalization technique (a common and helpful use case) if a downstream update fails. It is **NOT inherent to `coll-fns`**, but rather to eventual consistent database designs. Even if the after hooks were awaited, errors would not rollback prior successful updates.
+
+2. Although hooks can define `onError` callbacks, if `fn` executes async code, **it MUST await it or return it as a promise**. Otherwise, `onError` callback will never get fired because the function will be running in a separate promise context. If `fn` starts async work and doesn’t return/await it, any error will become an **unhandled rejection (and may crash the process)**.
+
+❌ **Wrong**
+
+```js
+hook(Coll, {
+  fn(doc) {
+    update(/* Some other collection */); // not awaited / not returned
+  },
+});
+```
+
+Might crash the process!
+
+```
+UnhandledPromiseRejection: Error: Validation failed
+    at beforeUpdate (.../src/hooks.js:42:11)
+    at update (.../src/update.js:128:7)
+    ...
+```
+
+✅ **Right**
+
+```js
+hook(Coll, {
+  async fn(doc) {
+    await update(/* Some other collection */); // Awaited
+  },
+});
+```
+
+or
+
+```js
+hook(Coll, {
+  fn(doc) {
+    return update(/* Some other collection */); // Returned promise
+  },
+});
+```
 
 ### Hook definition properties
 
@@ -960,7 +1005,8 @@ Each hook definition is an object with the following properties:
 ```js
 {
   /* Required. The function to execute.
-   * Arguments depend on the hook type (see above). */
+   * Arguments depend on the hook type (see above).
+   * Can be either synchronous or asynchronous. */
   fn(...args) { /* ... */ },
 
   /* Optional. Fields to fetch for the documents passed to the hook.
@@ -976,11 +1022,11 @@ Each hook definition is an object with the following properties:
    * needed anyway to fetch their "after" versions). */
   before: true,
 
-  /* Optional. Predicate that prevents the hook from running if it
+  /* Optional. Synchronous predicate that prevents the hook from running if it
    * returns a truthy value. Receives the same arguments as fn. */
   unless(doc) { return doc.isBot; },
 
-  /* Optional. Predicate that allows the hook to run only if it
+  /* Optional. Synchronous predicate that allows the hook to run only if it
    * returns a truthy value. Receives the same arguments as fn. */
   when(doc) { return doc.status === "pending"; },
 
