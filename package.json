@@ -2,7 +2,7 @@
   "name": "coll-fns",
   "version": "1.2.0",
   "type": "module",
-  "description": "",
+  "description": "A functional interface to join MongoDB collections and add hooks before and after insertions, updates and removals.",
   "scripts": {
     "build": "microbundle -f esm,cjs",
     "dev": "microbundle watch -f esm,cjs",
@@ -20,8 +20,21 @@
       "require": "./dist/coll-fns.cjs"
     }
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "MongoDB",
+    "Meteor",
+    "join",
+    "hook",
+    "before",
+    "after",
+    "protocol",
+    "find",
+    "fetch",
+    "insert",
+    "update",
+    "remove"
+  ],
+  "author": "David Savoie",
   "license": "ISC",
   "devDependencies": {
     "@eslint/js": "^9.39.2",
@@ -30,5 +43,8 @@
     "globals": "^17.0.0",
     "microbundle": "^0.15.1",
     "prettier": "^3.6.2"
+  },
+  "dependencies": {
+    "async-rivers": "^1.0.0"
   }
 }

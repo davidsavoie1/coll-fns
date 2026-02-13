@@ -47,6 +47,7 @@ Stop repeating business logic all over your code base. Define hooks on collectio
   - [`insert(Coll, doc)`](#insertcoll-doc)
   - [`update(Coll, selector, modifier, options)`](#updatecoll-selector-modifier-options)
   - [`remove(Coll, selector)`](#removecoll-selector)
+  - [`setHooksBuffer(buffer)`](#sethooksbufferbuffer)
   - [Hook best practices](#hook-best-practices)
 - [License](#license)
 
@@ -1210,6 +1211,29 @@ remove(Users, { inactive: true });
 2. Run `beforeRemove` hooks with matched documents (can throw to prevent removal)
 3. Remove the documents
 4. Fire `onRemoved` hooks asynchronously with each removed document
+
+## `setHooksBuffer(buffer)`
+
+After hooks, altough useful, can generate heavy background work, especially since they could spawn cascading hooks themselves.
+
+An `async-rivers` river is used internally to process the fire-and-forget side-effects of after hooks. By default, it uses a fixed buffer of size 10 (number of hook calls that can be processed simultaneously) and capped to 250 pending ones. If this cap is reached, the `onOverflow` policy is triggered, which throws an error in the default configuration.
+
+This conservative setting is meant to **prevent unbounded growth of after hooks** while indicating potential memory leaks in `coll-fns` usage. When that happens, you can consider:
+
+1. **Refactoring** to reduce the processing involved in these hooks
+2. **Configuring a buffer** for the hooks river to fit your needs
+
+`async-rivers` buffers (dropping, fixed or sliding) are exposed on the main export. See the library's documentation.
+
+`setHooksBuffer` must be called at startup **before any insert/update/remove operation triggers an after hook**.
+
+```js
+import { fixedBuffer, setHooksBuffer } from "coll-fns";
+
+/* Must be called BEFORE any after hook is processed. */
+const customBuffer = fixedBuffer(15, { maxPending: 1000, onOverflow: "slide" });
+setHooksBuffer(customBuffer);
+```
 
 ## Hook best practices
 

@@ -1,6 +1,8 @@
+import { riverside } from "async-rivers";
 import { combineFields } from "./fields";
 import { getProtocol } from "./protocol";
 import { isArr, isFunc, then } from "./util";
+import { hooksBuffer, _lockHooksBuffer } from "./buffer";
 
 /**
  * List of supported hook types.
@@ -23,10 +25,11 @@ const HOOK_TYPES = [
   "onRemoved", // (doc)
 ];
 
-/* Hook types that should not rethrow errors to the calling context.
- * These are fire-and-forget, so throwing might crash the process if unhandled.
+/* Hook types that are fire-and-forget.
+ * These are should not rethrow errors to the calling context,
+ * since it might crash the process if unhandled.
  * They will hence receive a default error handler if not defined by the user. */
-const NO_THROW_HOOK_TYPES = ["onInserted", "onUpdated", "onRemoved"];
+const FIRE_AND_FORGET_HOOK_TYPES = ["onInserted", "onUpdated", "onRemoved"];
 
 /**
  * @typedef {'beforeInsert'|'beforeUpdate'|'beforeRemove'|'onInserted'|'onUpdated'|'onRemoved'} HookType
@@ -159,7 +162,7 @@ function addHookDefinition(Coll, hookType, hookDef) {
   const collHooks = getHookDefinitions(Coll);
   const prevHooks = collHooks[hookType] || [];
 
-  const noThrow = NO_THROW_HOOK_TYPES.includes(hookType);
+  const noThrow = FIRE_AND_FORGET_HOOK_TYPES.includes(hookType);
   const defaultOnError = noThrow ? defaultErrorHandler : undefined;
 
   /* Enhance hook definition with metadata and default error handling.
@@ -211,8 +214,12 @@ export function getHook(Coll, hookType) {
 
   if (!hookDefinitions) return undefined;
 
-  return combineHookDefinitions(hookDefinitions);
+  const fireAndForget = FIRE_AND_FORGET_HOOK_TYPES.includes(hookType);
+
+  return combineHookDefinitions(hookDefinitions, fireAndForget);
 }
+
+let hooksRiver;
 
 /**
  * Combine multiple hook definitions into a single aggregated definition.
@@ -224,19 +231,13 @@ export function getHook(Coll, hookType) {
  * @returns {{ fields: any, fn: HookFn, before?: boolean }|undefined}
  * @internal
  */
-function combineHookDefinitions(hookDefs = []) {
+function combineHookDefinitions(
+  hookDefs = [],
+  fireAndForget = false // Should the hooks be fired and forgotten?
+) {
   if (!hookDefs.length) return undefined;
 
-  /* Reduce hook definitions to derive combined fields and `before` option */
-  const { fields, before } = hookDefs.reduce(
-    (acc, hookDef) => {
-      return {
-        fields: combineFields(acc.fields, hookDef.fields),
-        before: acc.before || hookDef.before,
-      };
-    },
-    { fields: null, before: undefined }
-  );
+  const { fields, before } = combineHookOptions(hookDefs);
 
   /* Create a combined hook definition which handler function will
    * run each hook with the provided arguments.
@@ -245,9 +246,29 @@ function combineHookDefinitions(hookDefs = []) {
     before,
     fields,
     fn(...args) {
+      if (fireAndForget) {
+        hookDefs.forEach((hookDef) =>
+          (hooksRiver ?? initHooksRiver()).dump([hookDef, ...args])
+        );
+        return;
+      }
+
       return then(hookDefs.map((hookDef) => runHook(hookDef, ...args)));
     },
   };
+}
+
+/* Reduce hook definitions to derive combined fields and `before` option */
+function combineHookOptions(hookDefs = []) {
+  return hookDefs.reduce(
+    (acc, hookDef) => {
+      return {
+        fields: combineFields(acc.fields, hookDef.fields),
+        before: acc.before || hookDef.before,
+      };
+    },
+    { fields: null, before: undefined }
+  );
 }
 
 /**
@@ -265,8 +286,8 @@ function combineHookDefinitions(hookDefs = []) {
  * @returns {HookFn|undefined} The executable function or undefined if filtered out.
  * @internal
  */
-function runHook(hookDef = {}, ...args) {
-  const { fn, onError, unless, when } = hookDef;
+async function runHook(hookDef = {}, ...args) {
+  const { hookType, fn, onError, unless, when } = hookDef;
 
   if (!isFunc(fn)) return;
 
@@ -281,7 +302,11 @@ function runHook(hookDef = {}, ...args) {
 
     if (!shouldRun) return;
 
-    return fn(...args);
+    if (!FIRE_AND_FORGET_HOOK_TYPES.includes(hookType)) {
+      return await fn(...args);
+    }
+
+    return await fn(...args);
   } catch (err) {
     /* If no error handler is defined, rethrow the error. */
     if (!isFunc(onError)) throw err;
@@ -297,4 +322,20 @@ function defaultErrorHandler(err, { collName, hookType }) {
     `Error in '${hookType}' hook of '${collName}' collection:`,
     err
   );
+}
+
+/* Initialize hooks river with configured buffer. */
+function initHooksRiver() {
+  if (hooksRiver) return hooksRiver;
+
+  /* Lock the buffer configuration so it cannot be changed after first usage */
+  _lockHooksBuffer();
+
+  /* Initialize river */
+  hooksRiver = riverside({ buffer: hooksBuffer });
+
+  /* Attach hailer to run hooks */
+  hooksRiver.hail(([hookDef, ...args]) => runHook(hookDef, ...args));
+
+  return hooksRiver;
 }

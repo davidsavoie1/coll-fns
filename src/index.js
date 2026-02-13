@@ -1,3 +1,9 @@
+export {
+  droppingBuffer,
+  fixedBuffer,
+  setHooksBuffer,
+  slidingBuffer,
+} from "./buffer";
 export { count } from "./count";
 export { exists, fetchIds, fetchList, fetchOne } from "./fetch";
 export { flattenFields } from "./fields";
