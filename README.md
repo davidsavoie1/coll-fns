@@ -47,7 +47,9 @@ Stop repeating business logic all over your code base. Define hooks on collectio
   - [`insert(Coll, doc)`](#insertcoll-doc)
   - [`update(Coll, selector, modifier, options)`](#updatecoll-selector-modifier-options)
   - [`remove(Coll, selector)`](#removecoll-selector)
-  - [`setHooksBuffer(buffer)`](#sethooksbufferbuffer)
+  - [`configurePool(options)`](#configurepooloptions)
+    - [Default behavior](#default-behavior)
+    - [Options](#options)
   - [Hook best practices](#hook-best-practices)
 - [License](#license)
 
@@ -1212,28 +1214,65 @@ remove(Users, { inactive: true });
 3. Remove the documents
 4. Fire `onRemoved` hooks asynchronously with each removed document
 
-## `setHooksBuffer(buffer)`
+## `configurePool(options)`
 
-After hooks, altough useful, can generate heavy background work, especially since they could spawn cascading hooks themselves.
+After hooks can generate significant background work, especially when they trigger cascading writes and more after hooks.
 
-An `async-rivers` river is used internally to process the fire-and-forget side-effects of after hooks. By default, it uses a fixed buffer of size 10 (number of hook calls that can be processed simultaneously) and capped to 250 pending ones. If this cap is reached, the `onOverflow` policy is triggered, which throws an error in the default configuration.
+`coll-fns` uses an internal execution pool for fire-and-forget after hooks.  
+You can configure this pool at startup.
 
-This conservative setting is meant to **prevent unbounded growth of after hooks** while indicating potential memory leaks in `coll-fns` usage. When that happens, you can consider:
+`configurePool` must be called **before any after hook is processed**.
 
-1. **Refactoring** to reduce the processing involved in these hooks
-2. **Configuring a buffer** for the hooks river to fit your needs
+### Default behavior
 
-`async-rivers` buffers (dropping, fixed or sliding) are exposed on the main export. See the library's documentation.
+By default, the pool uses:
 
-`setHooksBuffer` must be called at startup **before any insert/update/remove operation triggers an after hook**.
+- `maxConcurrent: 10`
+- `maxPending: 250`
+- `onOverflow`: drop new call and warn in console
+
+This prevents unbounded growth while allowing parallel processing.
+
+### Options
+
+```ts
+configurePool({
+  maxConcurrent?: number; // >= 1
+  maxPending?: number | Infinity; // >= 0 or Infinity
+  onOverflow?: "drop" | "shift" | (pendings, call) => reorderedPendings | void;
+  onError?: (error, call) => void;
+});
+```
+
+- `maxConcurrent`: maximum number of after hooks executed in parallel.
+- `maxPending`: maximum number of queued hooks waiting for execution.
+- `onOverflow`: policy to apply when pendings overflow
+  - "drop": ignore the new call.
+  - "shift": remove oldest pending call, enqueue the new one.
+  - function: return a reordered/filtered pending list.
+- `onError`: called when a pooled call fails. If omitted, errors are logged.
+
+**Example**
 
 ```js
-import { fixedBuffer, setHooksBuffer } from "coll-fns";
+import { configurePool } from "coll-fns";
 
 /* Must be called BEFORE any after hook is processed. */
-const customBuffer = fixedBuffer(15, { maxPending: 1000, onOverflow: "slide" });
-setHooksBuffer(customBuffer);
+configurePool({
+  maxConcurrent: 20,
+  maxPending: 1000,
+  onOverflow: "shift",
+  onError(error, call) {
+    console.error("After-hook pool error:", error, call);
+  },
+});
 ```
+
+**Notes**
+
+- This configuration is **startup-only**. Calling configurePool after processing starts throws.
+- If your workload is sensitive to ordering, keep maxConcurrent low or implement ordering constraints in your hook logic.
+- Tune maxConcurrent/maxPending based on your app’s throughput and memory profile.
 
 ## Hook best practices
 

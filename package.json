@@ -43,8 +43,5 @@
     "globals": "^17.0.0",
     "microbundle": "^0.15.1",
     "prettier": "^3.6.2"
-  },
-  "dependencies": {
-    "async-rivers": "^1.0.0"
   }
 }

@@ -1,8 +1,7 @@
-import { riverside } from "async-rivers";
 import { combineFields } from "./fields";
 import { getProtocol } from "./protocol";
 import { isArr, isFunc, then } from "./util";
-import { hooksBuffer, _lockHooksBuffer } from "./buffer";
+import { _getLockedPool } from "./pool";
 
 /**
  * List of supported hook types.
@@ -219,7 +218,8 @@ export function getHook(Coll, hookType) {
   return combineHookDefinitions(hookDefinitions, fireAndForget);
 }
 
-let hooksRiver;
+/* Calls pool to use. Will be lazily defined on first hooks processing. */
+let callsPool;
 
 /**
  * Combine multiple hook definitions into a single aggregated definition.
@@ -247,9 +247,7 @@ function combineHookDefinitions(
     fields,
     fn(...args) {
       if (fireAndForget) {
-        hookDefs.forEach((hookDef) =>
-          (hooksRiver ?? initHooksRiver()).dump([hookDef, ...args])
-        );
+        hookDefs.forEach((hookDef) => poolHook(hookDef, ...args));
         return;
       }
 
@@ -269,6 +267,11 @@ function combineHookOptions(hookDefs = []) {
     },
     { fields: null, before: undefined }
   );
+}
+
+function poolHook(hookDef = {}, ...args) {
+  const pool = callsPool ?? initPool();
+  pool.add(runHook, hookDef, ...args);
 }
 
 /**
@@ -324,18 +327,11 @@ function defaultErrorHandler(err, { collName, hookType }) {
   );
 }
 
-/* Initialize hooks river with configured buffer. */
-function initHooksRiver() {
-  if (hooksRiver) return hooksRiver;
+/* Initialize calls pool. */
+function initPool() {
+  if (callsPool) return callsPool;
 
-  /* Lock the buffer configuration so it cannot be changed after first usage */
-  _lockHooksBuffer();
-
-  /* Initialize river */
-  hooksRiver = riverside({ buffer: hooksBuffer });
-
-  /* Attach hailer to run hooks */
-  hooksRiver.hail(([hookDef, ...args]) => runHook(hookDef, ...args));
-
-  return hooksRiver;
+  /* Return the configured pool and lock it */
+  callsPool = _getLockedPool();
+  return callsPool;
 }
