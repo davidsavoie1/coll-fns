@@ -1,5 +1,8 @@
-# NEXT
+# 1.3.0 - 2026-02-16
 
+A pool is now used to handle after hooks in order to limit in-flight promises (queuing extra ones).
+
+- Use a configurable pool to handle concurrent after hooks;
 - Improve after hooks error handling documentation;
 
 ---
