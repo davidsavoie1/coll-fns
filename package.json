@@ -5,8 +5,7 @@
   "description": "A functional interface to join MongoDB collections and add hooks before and after insertions, updates and removals.",
   "scripts": {
     "build": "microbundle -f esm,cjs",
-    "dev": "microbundle watch -f esm,cjs",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "microbundle watch -f esm,cjs"
   },
   "files": [
     "dist"
