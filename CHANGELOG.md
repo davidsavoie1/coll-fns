@@ -1,3 +1,7 @@
+# NEXT
+
+- Fix | Remove doesn't await removed count before proceeding;
+
 # 1.3.0 - 2026-02-16
 
 A pool is now used to handle after hooks in order to limit in-flight promises (queuing extra ones).

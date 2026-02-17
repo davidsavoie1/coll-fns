@@ -55,21 +55,25 @@ export function remove(Coll, selector) {
         isFunc(beforeRemoveHook?.fn) && beforeRemoveHook.fn(docs),
 
         () => {
-          // Execute actual removal (can be sync or a Promise<number>)
-          const removedCount = protocol.remove(Coll, selector);
+          return then(
+            // Execute actual removal (can be sync or a Promise<number>)
+            protocol.remove(Coll, selector),
+            (removedCount) => {
+              /* If removal did nothing or there is no onRemoved hook, return as-is */
+              if (!removedCount || !isFunc(onRemovedHook?.fn))
+                return removedCount;
 
-          // If removal did nothing or there is no onRemoved hook, return as-is
-          if (!removedCount || !isFunc(onRemovedHook?.fn)) return removedCount;
+              /* Pass each (pre-fetched) doc to `onRemoved` hook.
+               * Do NOT await, should run asynchronously if protocol allows. */
+              fireAndForget(
+                () => docs.forEach((doc) => onRemovedHook.fn(doc)),
+                // eslint-disable-next-line no-console
+                (err) => console?.error("'onRemoved' error:", err)
+              );
 
-          /* Pass each (pre-fetched) doc to `onRemoved` hook.
-           * Do NOT await, should run asynchronously if protocol allows. */
-          fireAndForget(
-            () => docs.forEach((doc) => onRemovedHook.fn(doc)),
-            // eslint-disable-next-line no-console
-            (err) => console?.error("'onRemoved' error:", err)
+              return removedCount;
+            }
           );
-
-          return removedCount;
         }
       );
     }
