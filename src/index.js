@@ -7,6 +7,7 @@ export { join, getJoins, getJoinPrefix, setJoinPrefix } from "./join";
 export { remove } from "./remove";
 export { configurePool } from "./pool";
 export { setProtocol } from "./protocol";
+export { registerSoftRemove, softRemove } from "./softRemove";
 export { update } from "./update";
 
 export * as protocols from "./protocols";

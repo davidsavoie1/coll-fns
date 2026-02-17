@@ -1,6 +1,7 @@
 # NEXT
 
 - Fix | Remove doesn't await removed count before proceeding;
+- Added `softRemove` functionality;
 
 # 1.3.0 - 2026-02-16
 

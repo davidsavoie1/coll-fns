@@ -47,6 +47,8 @@ Stop repeating business logic all over your code base. Define hooks on collectio
   - [`insert(Coll, doc)`](#insertcoll-doc)
   - [`update(Coll, selector, modifier, options)`](#updatecoll-selector-modifier-options)
   - [`remove(Coll, selector)`](#removecoll-selector)
+  - [`registerSoftRemove(Coll, options)`](#registersoftremovecoll-options)
+  - [`softRemove(Coll, selector, keepModifier, options)`](#softremovecoll-selector-keepmodifier-options)
   - [`configurePool(options)`](#configurepooloptions)
     - [Default behavior](#default-behavior)
     - [Options](#options)
@@ -1213,6 +1215,106 @@ remove(Users, { inactive: true });
 2. Run `beforeRemove` hooks with matched documents (can throw to prevent removal)
 3. Remove the documents
 4. Fire `onRemoved` hooks asynchronously with each removed document
+
+## `registerSoftRemove(Coll, options)`
+
+Register soft-remove behavior for a collection. This is a startup-time registration step similar to joins/hooks registration.
+
+`registerSoftRemove` defines which targeted documents should be kept when `softRemove` is called, and optionally how those kept documents should be updated.
+
+```js
+import { registerSoftRemove } from "coll-fns";
+
+registerSoftRemove(Projects, {
+  /* Optional. Fields fetched before evaluating keep predicates. */
+  fields: { _id: 1, ownerId: 1, archived: 1 },
+
+  /* Optional predicate. If true, the doc is kept. */
+  when(project) {
+    return project.archived;
+  },
+
+  /* Optional predicate by references.
+   * Return [Coll, selector] pairs to test with exists(). */
+  docToCollSelectorPairs(project) {
+    return [
+      [Tasks, { projectId: project._id, status: { $ne: "done" } }],
+      [Invoices, { projectId: project._id }],
+    ];
+  },
+
+  /* Optional default modifier applied to kept docs by softRemove(). */
+  keepModifier: { $set: { archived: true, removedAt: new Date() } },
+});
+```
+
+**Options**
+
+- `fields`: fields to fetch before keep checks (merged with `_id` internally).
+- `when(doc)`: optional predicate; truthy means keep.
+- `docToCollSelectorPairs(doc)`: optional function returning `[[Coll, selector], ...]`; if any selector matches at least one doc, keep.
+- `keepModifier`: optional default modifier used by `softRemove` for kept docs (can also be provided per call).
+
+At least one of `when` or `docToCollSelectorPairs` must be provided.
+
+## `softRemove(Coll, selector, keepModifier, options)`
+
+Run a remove operation that can keep some matched documents (and optionally update those kept documents).
+
+```js
+import { softRemove } from "coll-fns";
+
+/* Remove removable projects; archive the ones that must be kept. */
+const result = await softRemove(
+  Projects,
+  { workspaceId },
+  { $set: { archived: true, removedAt: new Date() } },
+  { detailed: true }
+);
+
+// { removed: number, updated: number|null }
+```
+
+`keepModifier` can also be a function, including an async function. This is useful when the modifier must be built from runtime context.
+
+```js
+await softRemove(
+  Posts,
+  { _id: postId },
+  () => ({
+    $set: {
+      removedAt: new Date(),
+      removedBy: Meteor.userId(),
+      status: "archived",
+    },
+  }),
+  { detailed: true }
+);
+```
+
+If no `keepModifier` is passed, the default one from `registerSoftRemove` is used.  
+If neither is defined, kept docs are simply excluded from removal.
+
+```js
+/* Uses the registered default keepModifier */
+await softRemove(Projects, { workspaceId });
+```
+
+**Execution flow**
+
+1. Fetch docs targeted by `selector`.
+2. Evaluate keep predicates per doc (`when` and/or `docToCollSelectorPairs`).
+3. Remove docs not marked to keep.
+4. If a keep modifier exists, update kept docs with it.
+
+`softRemove` uses `coll-fns` `remove(...)` and `update(...)` internally.  
+That means the usual hooks (`beforeRemove`/`onRemoved`, `beforeUpdate`/`onUpdated`) are still applied in the corresponding branch.
+
+**Options**
+
+- `detailed` (default `false`):
+  - `false`: returns total affected count (`removed + updated`).
+  - `true`: returns `{ removed, updated }`.
 
 ## `configurePool(options)`
 
