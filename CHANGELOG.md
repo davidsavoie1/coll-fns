@@ -1,4 +1,4 @@
-# NEXT
+# 1.4.0 - 2026-02-17
 
 - Fix | Remove doesn't await removed count before proceeding;
 - Added `softRemove` functionality;

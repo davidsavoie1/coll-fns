@@ -1,6 +1,6 @@
 {
   "name": "coll-fns",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "type": "module",
   "description": "A functional interface to join MongoDB collections and add hooks before and after insertions, updates and removals.",
   "scripts": {
