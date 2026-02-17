@@ -6,15 +6,57 @@ import { remove } from "./remove";
 
 const softRemoveRegistry = new Map();
 
-/* Configure a collection to add a `softRemove` method
- * that will first fetch the targeted docs with requested `fields`
- * and use the `when` predicate to determine which should be kept.
- * Alternatively, `docToCollSelectorPairs` can be defined as a function
- * that takes a doc and returns a list of `[Coll, selector]` tuples.
- * These will be used to fetch related documents in other collections.
- * If any reference is found, doc will be soft removed.
- * If a `keepModifier` is defined, targeted docs will get updated
- * using it. Otherwise, they will simply get ignored by the removal. */
+/**
+ * Register soft-remove behavior for a collection.
+ *
+ * The registered config is consumed by `softRemove(Coll, ...)`:
+ * - fetches target docs with `fields`
+ * - keeps docs when `when(doc)` is truthy and/or when
+ *   `docToCollSelectorPairs(doc)` resolves to at least one existing reference
+ * - optionally applies `keepModifier` to kept docs during softRemove.
+ *
+ * At least one predicate source must be provided:
+ * - `when`
+ * - `docToCollSelectorPairs`
+ *
+ * @template TColl
+ * @param {TColl} Coll - Collection instance to register.
+ * @param {Object} [options={}]
+ * @param {(doc:any) => boolean|Promise<boolean>} [options.when]
+ *   Predicate returning whether a targeted doc should be kept.
+ * @param {(doc:any) => Array<[any, Object|string]>|Promise<Array<[any, Object|string]>>} [options.docToCollSelectorPairs]
+ *   Function returning `[Coll, selector]` tuples to check references with `exists(...)`.
+ *   If any reference exists, the doc is kept.
+ * @param {Object} [options.fields={_id:1}]
+ *   Fields fetched from targeted docs before predicate evaluation (`_id` is always included).
+ * @param {Object|(() => Object|Promise<Object>)|null|undefined} [options.keepModifier]
+ *   Default modifier (or factory) applied to kept docs when `softRemove` is called
+ *   without an explicit keepModifier argument.
+ *
+ * @throws {TypeError} If Coll is not an object, or if no predicate is provided.
+ * @throws {Error} If soft-remove is already registered for the collection.
+ *
+ * @example
+ * registerSoftRemove(Posts, {
+ *   when(post) {
+ *     return post.locked === true;
+ *   },
+ *   fields: { _id: 1, locked: 1 },
+ * });
+ *
+ * @example
+ * registerSoftRemove(Users, {
+ *   docToCollSelectorPairs(user) {
+ *     return [
+ *       [Posts, { authorId: user._id }],
+ *       [Comments, { authorId: user._id }],
+ *     ];
+ *   },
+ *   keepModifier: () => ({
+ *     $set: { removedAt: new Date(), status: "archived" },
+ *   }),
+ * });
+ */
 export function registerSoftRemove(
   Coll,
   {
@@ -80,7 +122,46 @@ function getSortRemoveArgs(Coll) {
   return registeredArgs;
 }
 
-/* New collection method definition. */
+/**
+ * Soft-remove documents from a collection based on pre-registered keep predicates.
+ *
+ * Flow:
+ * 1) Fetch docs matching selector with registered fields.
+ * 2) Keep docs that match `when` and/or `docToCollSelectorPairs` predicates.
+ * 3) Remove docs not kept.
+ * 4) Optionally update kept docs with keepModifier.
+ *
+ * Notes:
+ * - Requires prior registration with `registerSoftRemove(Coll, ...)`.
+ * - Uses `coll-fns` `remove`/`update` internally, so corresponding hooks still run.
+ * - Works with sync and async protocols.
+ *
+ * @template TColl
+ * @param {TColl} Coll - Collection instance.
+ * @param {Object|string} [selector={}] - Selector of docs to target.
+ * @param {Object|(() => Object|Promise<Object>)|null|undefined} [keepModifier]
+ *   Modifier to apply to kept docs, or a (possibly async) factory returning one.
+ *   If omitted, falls back to the registered default keepModifier.
+ *   If falsy, kept docs are ignored (not removed, not updated).
+ * @param {{detailed?: boolean}} [options={}]
+ * @param {boolean} [options.detailed=false]
+ *   When true, returns `{ removed, updated }`; otherwise returns `removed + updated`.
+ * @returns {number|{removed:number, updated:number|null}|Promise<number|{removed:number, updated:number|null}>}
+ *
+ * @example
+ * // Basic usage
+ * const total = await softRemove(Posts, { authorId });
+ *
+ * @example
+ * // Detailed usage with runtime keep modifier
+ * const res = await softRemove(
+ *   Posts,
+ *   { _id: postId },
+ *   () => ({ $set: { removedAt: new Date() } }),
+ *   { detailed: true }
+ * );
+ * // => { removed, updated }
+ */
 export function softRemove(
   Coll,
   selector = {}, // Removal selector

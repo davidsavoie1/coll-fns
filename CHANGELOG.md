@@ -2,6 +2,7 @@
 
 - Fix | Remove doesn't await removed count before proceeding;
 - Added `softRemove` functionality;
+- Add JSDocs for `softRemove` file;
 
 # 1.3.0 - 2026-02-16
 
