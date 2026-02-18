@@ -1,4 +1,4 @@
-# NEXT
+# 1.4.2 - 2026-02-18
 
 - Add types to project
 
