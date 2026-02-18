@@ -4,17 +4,20 @@
   "type": "module",
   "description": "A functional interface to join MongoDB collections and add hooks before and after insertions, updates and removals.",
   "scripts": {
-    "build": "microbundle -f esm,cjs",
-    "dev": "microbundle watch -f esm,cjs"
+    "build": "microbundle -f esm,cjs --generateTypes false",
+    "dev": "microbundle watch -f esm,cjs --generateTypes false"
   },
   "files": [
-    "dist"
+    "dist",
+    "src/index.d.ts"
   ],
   "source": "src/index.js",
   "main": "./dist/coll-fns.cjs",
   "module": "./dist/coll-fns.mjs",
+  "types": "./src/index.d.ts",
   "exports": {
     ".": {
+      "types": "./src/index.d.ts",
       "import": "./dist/coll-fns.mjs",
       "require": "./dist/coll-fns.cjs"
     }

@@ -1,3 +1,9 @@
+# NEXT
+
+- Add types to project
+
+---
+
 # 1.4.1 - 2026-02-18
 
 - Republished the built project. 1.4.0 source code included `softRemove` but was not built before publishing.
