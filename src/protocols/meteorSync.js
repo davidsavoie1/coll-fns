@@ -7,6 +7,13 @@ export default {
 
   getTransform: (Coll) => Coll._transform,
 
+  bindEnvironment(fn) {
+    const maybeMeteor = globalThis?.Meteor;
+    const bind = maybeMeteor?.bindEnvironment;
+    if (typeof bind !== "function") return fn;
+    return bind(fn);
+  },
+
   insert: (Coll, doc) => Coll.insert(doc),
 
   remove: (Coll, selector) => Coll.remove(selector),

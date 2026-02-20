@@ -290,7 +290,20 @@ function poolHook(hookDef = {}, ...args) {
  * @internal
  */
 async function runHook(hookDef = {}, ...args) {
-  const { hookType, fn, onError, unless, when } = hookDef;
+  const { fn, onError, unless, when } = hookDef;
+  const { bindEnvironment } = getProtocol();
+
+  /* Protocol might add a `bindEnvironment` function (ex: Meteor.bindEnvironment with Fibers)
+   * that must be used if provied. */
+  function runInEnvironment(fn, ...args) {
+    if (!isFunc(fn)) return;
+
+    if (!isFunc(bindEnvironment)) {
+      return fn(...args);
+    }
+
+    return bindEnvironment(fn)(...args);
+  }
 
   if (!isFunc(fn)) return;
 
@@ -298,24 +311,20 @@ async function runHook(hookDef = {}, ...args) {
    * from propagating to the caller. This is essential for fire-and-forget hooks
    * that should not crash the process. */
   try {
-    const prevented = unless?.(...args);
+    const prevented = runInEnvironment(unless, ...args);
     if (prevented) return;
 
-    const shouldRun = !when || when(...args);
+    const shouldRun = !when || runInEnvironment(when, ...args);
 
     if (!shouldRun) return;
 
-    if (!FIRE_AND_FORGET_HOOK_TYPES.includes(hookType)) {
-      return await fn(...args);
-    }
-
-    return await fn(...args);
+    return await runInEnvironment(fn, ...args);
   } catch (err) {
     /* If no error handler is defined, rethrow the error. */
     if (!isFunc(onError)) throw err;
 
     /* Otherwise, consider it handled */
-    onError(err, hookDef);
+    runInEnvironment(onError, err, hookDef);
   }
 }
 

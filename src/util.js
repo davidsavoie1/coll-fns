@@ -327,12 +327,14 @@ export function filter(pred, x) {
  * swallowing any internal error
  * and processing it with error handler when provided. */
 export function fireAndForget(fn, onError) {
-  queueMicrotask(async () => {
-    try {
-      await fn();
-    } catch (err) {
-      /* Catch the error and swallow it */
-      if (isFunc(onError)) onError(err);
+  try {
+    const maybePromise = fn();
+    if (isPromise(maybePromise)) {
+      maybePromise.catch((err) => {
+        if (isFunc(onError)) onError(err);
+      });
     }
-  });
+  } catch (err) {
+    if (isFunc(onError)) onError(err);
+  }
 }

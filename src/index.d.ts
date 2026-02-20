@@ -28,6 +28,9 @@ export interface Protocol<TColl = any, TDoc = AnyObject> {
   ) => MaybePromise<TDoc[]>;
   getName?: (Coll: TColl) => string;
   getTransform?: (Coll: TColl) => ((doc: TDoc) => any) | undefined;
+  bindEnvironment?: <TArgs extends any[], TRet>(
+    fn: (...args: TArgs) => TRet
+  ) => (...args: TArgs) => TRet;
   insert: (
     Coll: TColl,
     doc: AnyObject,

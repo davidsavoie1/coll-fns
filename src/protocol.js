@@ -9,6 +9,9 @@
  *   Return an array of documents for selector/options.
  * @property {(Coll:any) => ((doc:any)=>any)|undefined} getTransform
  *   Optional per-collection transform applied to each fetched document.
+ * @property {(fn:Function) => Function} [bindEnvironment]
+ *   Optional callback wrapper used to preserve runtime execution context
+ *   (for example Meteor Fibers with Meteor.bindEnvironment).
  * @property {(Coll:any, doc:Object, options?:Object) => any|Promise<any>} insert
  *   Insert a document and return the inserted _id (or driver-specific result).
  * @property {(Coll:any, selector:Object, options?:Object) => number|Promise<number>} remove
@@ -44,6 +47,11 @@ const DEFAULT_PROTOCOL = {
    * after being fetched with descendants. */
   getTransform(/* Coll */) {
     return undefined;
+  },
+
+  /* Optional. Wrap callbacks to preserve runtime environment context. */
+  bindEnvironment(fn) {
+    return fn;
   },
 
   /* Insert a document in a collection

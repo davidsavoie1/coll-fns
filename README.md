@@ -174,6 +174,22 @@ setProtocol(protocol);
 
 There's also a **native NodeJS MongoDB driver** protocol built-in (`protocols.node`).
 
+### Execution context (`bindEnvironment`)
+
+Protocols can optionally expose a `bindEnvironment(fn)` method.  
+It is used by hooks internals to run callbacks in the expected runtime context.
+
+- In Meteor Fiber-based servers, this prevents errors like:
+  - `Meteor code must always run within a Fiber...`
+- In environments that don't need special wrapping, it can be omitted.
+
+`protocols.meteorSync` already handles this automatically:
+
+- On Meteor server with Fibers, it uses `Meteor.bindEnvironment` when available.
+- On Meteor client (or any environment where `Meteor.bindEnvironment` is unavailable), it falls back to a normal direct call.
+
+So if you use `protocols.meteorSync` on both client and server in a Fiber-based Meteor app, **no override is required** specifically for this behavior.
+
 <details style="margin-bottom: 1rem">
 <summary><strong>Custom protocol</strong></summary>
 
@@ -196,6 +212,10 @@ const customProtocol = {
    * after being fetched with descendants. */
   getTransform(/* Coll */) {},
 
+  /* Optional. Wrap callbacks to preserve runtime context
+   * (ex: Meteor.bindEnvironment with Fibers). */
+  bindEnvironment(/* fn */) {},
+
   /* Insert a document in a collection
    * and return the inserted _id. */
   insert(/* Coll, doc, options */) {},
@@ -211,6 +231,22 @@ const customProtocol = {
 
 setProtocol(customProtocol);
 ```
+
+If your runtime has special callback context requirements, implement `bindEnvironment`.
+
+```js
+const customProtocol = {
+  // ...
+  bindEnvironment(fn) {
+    if (typeof Meteor?.bindEnvironment === "function") {
+      return Meteor.bindEnvironment(fn);
+    }
+    return fn;
+  },
+};
+```
+
+If your runtime has no such requirement, simply omit `bindEnvironment`.
 
 </details>
 
