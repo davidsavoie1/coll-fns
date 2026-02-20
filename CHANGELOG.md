@@ -1,4 +1,4 @@
-# NEXT
+# 1.4.3 - 2026-02-20
 
 - Fix | Preserve Meteor Fiber context in hooks with `protocol.bindEnvironment` support;
 - Fix | `protocols.meteorSync` now binds hook callbacks with `Meteor.bindEnvironment` when available;
