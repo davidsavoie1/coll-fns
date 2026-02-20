@@ -1,6 +1,6 @@
 import { combineFields } from "./fields";
 import { getProtocol } from "./protocol";
-import { isArr, isFunc, then } from "./util";
+import { isArr, isFunc, isPromise, then } from "./util";
 import { _getLockedPool } from "./pool";
 
 /**
@@ -45,13 +45,15 @@ const FIRE_AND_FORGET_HOOK_TYPES = ["onInserted", "onUpdated", "onRemoved"];
  * Optional predicate to prevent a hook from running.
  * If returns a truthy value, the hook is skipped.
  * Receives the same arguments as the HookFn.
- * @typedef {(...args:any[]) => boolean} HookUnlessPredicate
+ * Can return a boolean or a Promise<boolean>.
+ * @typedef {(...args:any[]) => boolean|Promise<boolean>} HookUnlessPredicate
  */
 
 /**
  * Optional predicate that must be truthy for the hook to run.
  * Receives the same arguments as the HookFn.
- * @typedef {(...args:any[]) => boolean} HookWhenPredicate
+ * Can return a boolean or a Promise<boolean>.
+ * @typedef {(...args:any[]) => boolean|Promise<boolean>} HookWhenPredicate
  */
 
 /**
@@ -76,6 +78,7 @@ const FIRE_AND_FORGET_HOOK_TYPES = ["onInserted", "onUpdated", "onRemoved"];
  * @property {boolean} [before]
  * @property {import('./fields').FieldSpec|true|undefined} [fields]
  * @property {HookFn} fn
+ * @property {boolean} [fireAndForget] Internal flag to indicate deferred execution mode.
  * @property {HookErrorHandler} [onError]
  * @property {HookUnlessPredicate} [unless]
  * @property {HookWhenPredicate} [when]
@@ -247,7 +250,9 @@ function combineHookDefinitions(
     fields,
     fn(...args) {
       if (fireAndForget) {
-        hookDefs.forEach((hookDef) => poolHook(hookDef, ...args));
+        hookDefs.forEach((hookDef) =>
+          poolHook({ ...hookDef, fireAndForget }, ...args)
+        );
         return;
       }
 
@@ -289,16 +294,16 @@ function poolHook(hookDef = {}, ...args) {
  * @returns {HookFn|undefined} The executable function or undefined if filtered out.
  * @internal
  */
-async function runHook(hookDef = {}, ...args) {
-  const { fn, onError, unless, when } = hookDef;
+function runHook(hookDef = {}, ...args) {
+  const { fireAndForget, fn, onError, unless, when } = hookDef;
   const { bindEnvironment } = getProtocol();
 
   /* Protocol might add a `bindEnvironment` function (ex: Meteor.bindEnvironment with Fibers)
-   * that must be used if provied. */
+   * that must be used if provided. */
   function runInEnvironment(fn, ...args) {
     if (!isFunc(fn)) return;
 
-    if (!isFunc(bindEnvironment)) {
+    if (!fireAndForget || !isFunc(bindEnvironment)) {
       return fn(...args);
     }
 
@@ -306,25 +311,28 @@ async function runHook(hookDef = {}, ...args) {
   }
 
   if (!isFunc(fn)) return;
-
-  /* Wrap the function in a try-catch to potentially prevent errors
-   * from propagating to the caller. This is essential for fire-and-forget hooks
-   * that should not crash the process. */
-  try {
-    const prevented = runInEnvironment(unless, ...args);
-    if (prevented) return;
-
-    const shouldRun = !when || runInEnvironment(when, ...args);
-
-    if (!shouldRun) return;
-
-    return await runInEnvironment(fn, ...args);
-  } catch (err) {
-    /* If no error handler is defined, rethrow the error. */
+  const handleError = (err) => {
     if (!isFunc(onError)) throw err;
-
-    /* Otherwise, consider it handled */
     runInEnvironment(onError, err, hookDef);
+  };
+
+  /* Normalize sync/async hooks without forcing a Promise return
+   * for fully synchronous paths. */
+  try {
+    const maybeResult = then(runInEnvironment(unless, ...args), (prevented) => {
+      if (prevented) return;
+
+      const maybeShouldRun = !when || runInEnvironment(when, ...args);
+      return then(maybeShouldRun, (shouldRun) => {
+        if (!shouldRun) return;
+        return runInEnvironment(fn, ...args);
+      });
+    });
+
+    if (!isPromise(maybeResult)) return maybeResult;
+    return maybeResult.catch(handleError);
+  } catch (err) {
+    return handleError(err);
   }
 }
 

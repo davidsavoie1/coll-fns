@@ -1063,12 +1063,14 @@ Each hook definition is an object with the following properties:
    * needed anyway to fetch their "after" versions). */
   before: true,
 
-  /* Optional. Synchronous predicate that prevents the hook from running if it
-   * returns a truthy value. Receives the same arguments as fn. */
+  /* Optional. Predicate that prevents the hook from running if it
+   * returns a truthy value. Can be sync or async.
+   * Receives the same arguments as fn. */
   unless(doc) { return doc.isBot; },
 
-  /* Optional. Synchronous predicate that allows the hook to run only if it
-   * returns a truthy value. Receives the same arguments as fn. */
+  /* Optional. Predicate that allows the hook to run only if it
+   * returns a truthy value. Can be sync or async.
+   * Receives the same arguments as fn. */
   when(doc) { return doc.status === "pending"; },
 
   /* Optional handler called if the hook function throws an error.

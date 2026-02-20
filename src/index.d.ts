@@ -78,8 +78,8 @@ export type HookType =
   | "onRemoved";
 
 export type HookFn = (...args: any[]) => any | Promise<any>;
-export type HookUnlessPredicate = (...args: any[]) => boolean;
-export type HookWhenPredicate = (...args: any[]) => boolean;
+export type HookUnlessPredicate = (...args: any[]) => boolean | Promise<boolean>;
+export type HookWhenPredicate = (...args: any[]) => boolean | Promise<boolean>;
 
 export interface HookDef {
   before?: boolean;
