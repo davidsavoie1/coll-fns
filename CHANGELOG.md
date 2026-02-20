@@ -2,6 +2,7 @@
 
 - Fix | Preserve Meteor Fiber context in hooks with `protocol.bindEnvironment` support;
 - Fix | `protocols.meteorSync` now binds hook callbacks with `Meteor.bindEnvironment` when available;
+- Allow sync or async hook predicate functions;
 
 ---
 
