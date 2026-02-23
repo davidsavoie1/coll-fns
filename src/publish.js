@@ -2,6 +2,9 @@ import { nanoid } from "nanoid";
 import { getProtocol } from "./protocol";
 import { fetchOne } from "./fetch";
 import { isArr, isFunc, isObj } from "./util";
+import { createPool } from "./pool";
+
+const MAX_CONCURRENT = 10; // Maximum number of concurrent observer creation processed
 
 const COLL_DOC_SEPARATOR = "|";
 const KEY_SEPARATOR = "|";
@@ -23,7 +26,8 @@ const DEBUG = {
 
 export default async function publish(
   publication, // { added, changed, removed, ready, error, onStop }.
-  args = {} // Publication arguments
+  args = {}, // Publication arguments
+  options = {}
 ) {
   if (!isFunc(publication.ready)) {
     throw new Error(
@@ -32,7 +36,7 @@ export default async function publish(
   }
 
   try {
-    return await runPublication(publication, args);
+    return await runPublication(publication, args, options);
   } catch (error) {
     if (isFunc(publication.error)) {
       publication.error(error);
@@ -42,7 +46,7 @@ export default async function publish(
   }
 }
 
-async function runPublication(publication, args = {}) {
+async function runPublication(publication, args = {}, options = {}) {
   const log = createDebugLog(args.debug);
 
   /* Publication-level stop flag to prevent late observers from leaking. */
@@ -54,11 +58,16 @@ async function runPublication(publication, args = {}) {
   /* Map of `observerId.docId` => Set(...observers) */
   const observersBySubscribers = createRegistry();
 
-  /* Map of observer by `coll.EJSONSelector.EJSONFields` */
+  /* Map of observer by key representing the maybe reusable query */
   const observersByQuery = createRegistry();
 
   /* Map of observers by published document */
   const observersCountByDoc = createRegistry();
+
+  const pool = createPool({
+    maxConcurrent: options?.maxConcurrent ?? MAX_CONCURRENT,
+    maxPending: Infinity,
+  });
 
   /* === INTERNAL FUNCTIONS ===
    * Defined inside publication to close over the registries. */
@@ -136,6 +145,9 @@ async function runPublication(publication, args = {}) {
     /* Observer's list of `collname|docId` docs added through DDP. */
     const docsList = new Set();
 
+    /* Map of token by subscriberKey to ensure only latest operation succeeds */
+    const tokenBySubscriber = createTokensRegistry();
+
     let resolveCreation, rejectCreation;
     const creationPromise = new Promise((resolve, reject) => {
       resolveCreation = resolve;
@@ -148,13 +160,31 @@ async function runPublication(publication, args = {}) {
 
     /* === INTERNAL OBSERVER CREATION FUNCTIONS === */
 
-    async function registerChildObserver(childArgs, subscriberKey, ancestors) {
+    async function registerChildObserver(
+      childArgs,
+      subscriberKey,
+      token,
+      ancestors
+    ) {
       /* Prevent registering children after observer is cancelled. */
       if (cancelled || publicationStopped) return;
+
+      /* Prevent registering child if its token has been replaced or removed */
+      if (!tokenBySubscriber.check(subscriberKey, token)) return;
 
       const subObserver = await createOrReuseObserver(childArgs, { ancestors });
 
       if (!subObserver) return;
+
+      /* Check again after promise. If created too late, drop it safely. */
+      if (
+        cancelled ||
+        publicationStopped ||
+        !tokenBySubscriber.check(subscriberKey, token)
+      ) {
+        subObserver.unsubscribeMaybeCancel(subscriberKey);
+        return;
+      }
 
       /* Register the subObserver in the observer's subscribers list
        * and in the `observersBySubscribers` registry */
@@ -263,15 +293,23 @@ async function runPublication(publication, args = {}) {
            * Used to save all observers linked to this document for further retrieval. */
           const subscriberKey = createSubscriberKey(_id);
 
+          /* Generate a token to save in the registry and that
+           * must still be the same when registering child observer. */
+          const token = tokenBySubscriber.register(subscriberKey);
+
           /* Add the added document to the ancestors list */
           const doc = { ...fields, _id };
           const newAncestors = [doc, ...ancestors];
 
           /* For each added document, create a new subObserver
            * for each child publication. */
-          await Promise.all(
-            validChildren.map((childArgs) =>
-              registerChildObserver(childArgs, subscriberKey, newAncestors)
+          validChildren.forEach((childArgs) =>
+            pool.add(
+              registerChildObserver,
+              childArgs,
+              subscriberKey,
+              token,
+              newAncestors
             )
           );
         },
@@ -319,18 +357,33 @@ async function runPublication(publication, args = {}) {
             validChildren
           );
 
-          /* Create child observers that are missing from current ones */
-          await Promise.all(
-            [...newArgsByQueryKey.entries()].map(async ([queryKey, args]) => {
-              if (currObserversByQueryKey.has(queryKey)) return;
-              await registerChildObserver(args, subscriberKey, newAncestors);
-            })
+          const missingEntries = [...newArgsByQueryKey.entries()].reduce(
+            (acc, [queryKey, args]) => {
+              if (currObserversByQueryKey.has(queryKey)) return acc;
+              return [...acc, args];
+            },
+            []
           );
+
+          if (missingEntries.length) {
+            const token = tokenBySubscriber.register(subscriberKey);
+
+            /* Create child observers that are missing from current ones */
+            missingEntries.forEach((args) => {
+              pool.add(
+                registerChildObserver,
+                args,
+                subscriberKey,
+                token,
+                newAncestors
+              );
+            });
+          }
 
           /* Unsubscribe current child observers no longer needed */
           currObserversByQueryKey.forEach((obs, queryKey) => {
             if (newArgsByQueryKey.has(queryKey)) return;
-            unsubscribeSubObserver(subscriberKey, obs);
+            pool.add(unsubscribeSubObserver, subscriberKey, obs);
           });
         },
 
@@ -346,13 +399,17 @@ async function runPublication(publication, args = {}) {
           /* Recreate the subscriber key that was used when doc was added. */
           const subscriberKey = createSubscriberKey(_id);
 
+          /* Invalidate previous token for this subscriber
+           * to ensure no previous child observer creation is allowed */
+          tokenBySubscriber.remove(subscriberKey);
+
           /* Retrieve the subscriber's observers from the registry */
           const subscriberObservers =
             observersBySubscribers.get(subscriberKey) || new Set();
 
           /* Unsubscribe each observer linked to this doc subscriber. */
           subscriberObservers.forEach((subObserver) =>
-            unsubscribeSubObserver(subscriberKey, subObserver)
+            pool.add(unsubscribeSubObserver, subscriberKey, subObserver)
           );
         },
       };
@@ -845,5 +902,25 @@ function createDebugLog(debug) {
       // eslint-disable-next-line no-console
       console.log(location, ...content);
     }
+  };
+}
+
+function createTokensRegistry() {
+  const registry = new Map();
+
+  return {
+    check(subscriberKey, token) {
+      return registry.get(subscriberKey) === token;
+    },
+
+    register(subscriberKey) {
+      const token = nanoid();
+      registry.set(subscriberKey, token);
+      return token;
+    },
+
+    remove(subscriberKey) {
+      registry.delete(subscriberKey);
+    },
   };
 }

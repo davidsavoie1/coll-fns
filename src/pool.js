@@ -33,7 +33,7 @@ export function _getLockedPool() {
   return pool;
 }
 
-function createPool({
+export function createPool({
   maxConcurrent = MAX_CONCURRENT, // Maximum number of concurrent calls
   maxPending = MAX_PENDING, // Maximum number of pending calls
   onError, // (error, call) What to do when a call fails. Defaults to console.error.
