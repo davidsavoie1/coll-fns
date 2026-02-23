@@ -19,6 +19,9 @@ export default {
 
   insert: (Coll, doc) => Coll.insertAsync(doc),
 
+  observe: (Coll, selector, callbacks, options) =>
+    Coll.find(selector, options).observeChangesAsync(callbacks),
+
   remove: (Coll, selector) => Coll.removeAsync(selector),
 
   update: (Coll, selector, modifier, options) => {

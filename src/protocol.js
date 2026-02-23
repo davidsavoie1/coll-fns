@@ -1,3 +1,5 @@
+import EJSON from "ejson";
+
 /**
  * Protocol interface implemented by adapters (Meteor, Node, etc.).
  * All methods may return synchronously or as a Promise.
@@ -60,10 +62,21 @@ const DEFAULT_PROTOCOL = {
     throw new Error(`'insert' method must be defined with 'setProtocol'.`);
   },
 
+  /* Observe documents in a collection and react to modifications
+   * with provided callbacks `{ added(id, fields), changed(id, fields), removed(id) }` */
+  observe(/* Coll, selector = {}, callbacks = {}, options = {} */) {
+    throw new Error(`'observe' method must be defined with 'setProtocol'.`);
+  },
+
   /* Remove documents in a collection
    * and return the number of removed documents. */
   remove(/* Coll, selector, options */) {
     throw new Error(`'remove' method must be defined with 'setProtocol'.`);
+  },
+
+  /* Stringify content. Use EJSON by default to handle Date and Binary. */
+  stringify(x) {
+    return EJSON.stringify(x, { canonical: true });
   },
 
   /* Update documents in a collection

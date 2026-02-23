@@ -38,6 +38,10 @@
   ],
   "author": "David Savoie",
   "license": "ISC",
+  "dependencies": {
+    "ejson": "^2.2.3",
+    "nanoid": "^5.1.6"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.0.1",

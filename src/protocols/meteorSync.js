@@ -16,6 +16,9 @@ export default {
 
   insert: (Coll, doc) => Coll.insert(doc),
 
+  observe: (Coll, selector, callbacks, options) =>
+    Coll.find(selector, options).observeChanges(callbacks),
+
   remove: (Coll, selector) => Coll.remove(selector),
 
   update: (Coll, selector, modifier, options) => {

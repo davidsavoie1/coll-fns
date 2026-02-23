@@ -1,0 +1,849 @@
+import { nanoid } from "nanoid";
+import { getProtocol } from "./protocol";
+import { fetchOne } from "./fetch";
+import { isArr, isFunc, isObj } from "./util";
+
+const COLL_DOC_SEPARATOR = "|";
+const KEY_SEPARATOR = "|";
+
+const DEBUG = {
+  BYPASSED: "BYPASSED",
+  CANCELLED: "CANCELLED",
+  CREATED: "CREATED",
+  CREATING: "CREATING",
+  INVALIDATED: "INVALIDATED",
+  DOC_ADDED: "DOC_ADDED",
+  DOC_CHANGED: "DOC_CHANGED",
+  DOC_REMOVED: "DOC_REMOVED",
+  READY: "READY",
+  REUSED: "REUSED",
+  STOPPED: "STOPPED",
+  UNSUBSCRIBED: "UNSUBSCRIBED",
+};
+
+export default async function publish(
+  publication, // { added, changed, removed, ready, error, onStop }.
+  args = {} // Publication arguments
+) {
+  if (!isFunc(publication.ready)) {
+    throw new Error(
+      "'publication' context with a 'ready' method must be passed to 'publish'"
+    );
+  }
+
+  try {
+    return await runPublication(publication, args);
+  } catch (error) {
+    if (isFunc(publication.error)) {
+      publication.error(error);
+    } else {
+      throw error;
+    }
+  }
+}
+
+async function runPublication(publication, args = {}) {
+  const log = createDebugLog(args.debug);
+
+  /* Publication-level stop flag to prevent late observers from leaking. */
+  let publicationStopped = false;
+
+  /* === REGISTRIES ===
+   * Create registries inside publication to create closures. */
+
+  /* Map of `observerId.docId` => Set(...observers) */
+  const observersBySubscribers = createRegistry();
+
+  /* Map of observer by `coll.EJSONSelector.EJSONFields` */
+  const observersByQuery = createRegistry();
+
+  /* Map of observers by published document */
+  const observersCountByDoc = createRegistry();
+
+  /* === INTERNAL FUNCTIONS ===
+   * Defined inside publication to close over the registries. */
+
+  async function createOrReuseObserver(
+    /* Public arguments passed from publication function */
+    {
+      Coll, // Meteor collection instance
+      selector, // Object litteral or function that receives ancestors as arguments
+      children = [], // [...{ ...args }] List of arguments to children observers. Non object arguments will be omitted, so they can be conditionally defined.
+      deps, // Optional. List of parent field dependencies that must change to invalidate observers.
+      debug, // Should debugging messages be displayed? true will log all. Otherwise, an object of predefined location can be used with thruthy or falsy value to log or not
+      ...options // Cursor options
+    } = {},
+
+    /* Internal arguments */
+    {
+      ancestors = [], // List of ancestor documents
+    } = {}
+  ) {
+    if (publicationStopped) return null;
+
+    if (!selector) {
+      throw new Error(`'selector' is necessary to create an observer.`);
+    }
+
+    const log = createDebugLog(debug);
+
+    /* Keep only children with object arguments. */
+    const validChildren = children.filter(isObj);
+
+    /* Create a unique id for the observer */
+    const observerId = nanoid();
+
+    /* Create a unique subscriber key from the observer's id and the doc id */
+    const createSubscriberKey = (docId) =>
+      [observerId, coll, docId].join(KEY_SEPARATOR);
+
+    const protocol = getProtocol();
+
+    /* Retrieve collection name for publishing data over DDP */
+    const coll = protocol.getName(Coll);
+
+    /* Flag cancelled state to prevent cancelling more than once */
+    let cancelled = false;
+
+    /* Flat list of all subObservers for this observer only (closure) */
+    const subObservers = new Set();
+
+    /* If `selector` is a function, derive actual selector.
+     * Otherwise, use `selector` as it is. */
+    const actSelector = await interpretSelector(selector, ancestors);
+
+    /* Simplified key for debugging purposes */
+    const debugKey = createDebugKey(Coll, actSelector);
+
+    /* Create a key from the cursor arguments so it can be reused. */
+    const queryKey = createQueryKey(Coll, actSelector, options);
+
+    const shouldInvalidatePred = interpretFieldDeps(validChildren);
+
+    /* Search for an already existing observer for the specified selector */
+    const existingObserver = observersByQuery.get(queryKey);
+
+    /* If an observer for this query already exists,
+     * return it and bypass observer creation.
+     * This might be a promise that will resolve to an observer. */
+    if (existingObserver) {
+      log(DEBUG.REUSED, debugKey);
+      return existingObserver;
+    }
+
+    /* === OBSERVER WILL GET CREATED === */
+
+    /* Observer's list of `collname|docId` docs added through DDP. */
+    const docsList = new Set();
+
+    let resolveCreation, rejectCreation;
+    const creationPromise = new Promise((resolve, reject) => {
+      resolveCreation = resolve;
+      rejectCreation = reject;
+    });
+
+    /* Save an observer creation promise as a placeholder
+     * by its query key for reusability */
+    observersByQuery.set(queryKey, creationPromise);
+
+    /* === INTERNAL OBSERVER CREATION FUNCTIONS === */
+
+    async function registerChildObserver(childArgs, subscriberKey, ancestors) {
+      /* Prevent registering children after observer is cancelled. */
+      if (cancelled || publicationStopped) return;
+
+      const subObserver = await createOrReuseObserver(childArgs, { ancestors });
+
+      if (!subObserver) return;
+
+      /* Register the subObserver in the observer's subscribers list
+       * and in the `observersBySubscribers` registry */
+      addSubscriber(subscriberKey, subObserver);
+
+      /* Save the subObserver in the current observer's subObservers list */
+      subObservers.add(subObserver);
+    }
+
+    /* Unsubscribe a `subObserver` from a specific `subscriberKey` */
+    function unsubscribeSubObserver(subscriberKey, subObserver) {
+      /* Unsubscribe the subObserver for this subscriber */
+      subObserver.unsubscribeMaybeCancel(subscriberKey);
+
+      /* Remove from the current observer's `subObservers` list */
+      subObservers.delete(subObserver);
+
+      /* Remove from the global subscribers' observers registry */
+      observersBySubscribers.pull(subscriberKey, subObserver);
+
+      /* subObserver can still be active for another observer
+       * using the same query key, so keep it in query observers register. */
+    }
+
+    /* Return a Map of `queryKey => observer` for a specific `subscriberKey` */
+    async function getObserversByQueryKey(subscriberKey) {
+      const observersSet = observersBySubscribers.get(subscriberKey);
+      if (!observersSet) return new Map();
+
+      /* Await the observer's list, since some might still be pointing to a placeholder promise */
+      const observers = await Promise.all(observersSet.values());
+
+      return new Map(observers.map((obs) => [obs.queryKey, obs]));
+    }
+
+    function isOwnSubscriberKey(subscriberKey) {
+      const [keyObserverId] = subscriberKey.split(KEY_SEPARATOR);
+      return keyObserverId === observerId;
+    }
+
+    /* DDP add doc, keeping docs registries in sync */
+    function addDoc(coll, _id, fields) {
+      const completeDocId = [coll, _id].join(COLL_DOC_SEPARATOR);
+
+      /* Add doc to observer's docs list */
+      docsList.add(completeDocId);
+
+      /* Increment global registry doc's observers count */
+      const prevCount = observersCountByDoc.get(completeDocId) ?? 0;
+      observersCountByDoc.set(completeDocId, prevCount + 1);
+
+      /* Publish document over DDP */
+      log(DEBUG.DOC_ADDED, coll, _id);
+      publication.added?.(coll, _id, fields);
+    }
+
+    /* DDP remove doc, keeping docs registries in sync */
+    function decrementDocCountAndRemoveIfZero(coll, _id) {
+      const completeDocId = [coll, _id].join(COLL_DOC_SEPARATOR);
+
+      /* Remove doc from observer's docs list */
+      docsList.delete(completeDocId);
+
+      /* Decrement global registry doc's observers count */
+      const prevCount = observersCountByDoc.get(completeDocId) ?? 0;
+      const nextCount = Math.max(0, prevCount - 1);
+
+      /* If count drops to 0, actually remove doc.
+       * Otherwise, simply save new decremented observers count. */
+      if (nextCount <= 0) {
+        observersCountByDoc.delete(completeDocId);
+
+        /* Publish removal over DDP */
+        log(DEBUG.DOC_REMOVED, coll, _id);
+        publication.removed?.(coll, _id);
+      } else {
+        observersCountByDoc.set(completeDocId, nextCount);
+      }
+    }
+
+    /* === CREATE OBSERVER === */
+
+    try {
+      log(DEBUG.CREATING, debugKey);
+
+      /* No need to create an observer for VOID_SELECTOR. Bypass by returning null. */
+      if (actSelector === VOID_SELECTOR) {
+        log(DEBUG.BYPASSED, debugKey);
+        observersByQuery.delete(queryKey);
+        resolveCreation(null);
+        return null;
+      }
+
+      const observeCallbacks = {
+        /* When a document is added to the cursor... */
+        async added(_id, fields) {
+          /* Prevent any more DDP operations when cancelled */
+          if (cancelled) return;
+
+          addDoc(coll, _id, fields);
+
+          /* If no children publications, no further processing required. */
+          if (!validChildren?.length) return;
+
+          /* Key representing a specific document for a specific observer.
+           * Used to save all observers linked to this document for further retrieval. */
+          const subscriberKey = createSubscriberKey(_id);
+
+          /* Add the added document to the ancestors list */
+          const doc = { ...fields, _id };
+          const newAncestors = [doc, ...ancestors];
+
+          /* For each added document, create a new subObserver
+           * for each child publication. */
+          await Promise.all(
+            validChildren.map((childArgs) =>
+              registerChildObserver(childArgs, subscriberKey, newAncestors)
+            )
+          );
+        },
+
+        /* When a document from the cursor changes... */
+        async changed(_id, fields) {
+          /* Prevent any more DDP operations when cancelled */
+          if (cancelled) return;
+
+          log(DEBUG.DOC_CHANGED, coll, _id, fields);
+          publication.changed?.(coll, _id, fields);
+
+          /* If no child publication, no further processing required. */
+          if (!validChildren?.length) return;
+
+          /* Fetch the updated doc with the fields defined in the cusor options
+           * in order to recompute the children selectors and invalidate those
+           * that have changed. */
+          const updatedDoc = await fetchOne(
+            Coll,
+            { _id },
+            { fields: options.fields, transform: null }
+          );
+
+          const newAncestors = [updatedDoc, ...ancestors];
+
+          /* If deps are defined, invalidate observers only when
+           * one of the deps is targeted by the changed fields or ancestors. */
+          const invalidated = await shouldInvalidatePred(
+            fields,
+            ...newAncestors
+          );
+          if (!invalidated) return;
+          log(DEBUG.INVALIDATED, debugKey);
+
+          /* Recreate the subscriber key that was used when doc was added. */
+          const subscriberKey = createSubscriberKey(_id);
+
+          const currObserversByQueryKey =
+            await getObserversByQueryKey(subscriberKey);
+
+          /* Recompute the children query keys from new version of doc */
+          const newArgsByQueryKey = await deriveArgsByQueryKey(
+            newAncestors,
+            validChildren
+          );
+
+          /* Create child observers that are missing from current ones */
+          await Promise.all(
+            [...newArgsByQueryKey.entries()].map(async ([queryKey, args]) => {
+              if (currObserversByQueryKey.has(queryKey)) return;
+              await registerChildObserver(args, subscriberKey, newAncestors);
+            })
+          );
+
+          /* Unsubscribe current child observers no longer needed */
+          currObserversByQueryKey.forEach((obs, queryKey) => {
+            if (newArgsByQueryKey.has(queryKey)) return;
+            unsubscribeSubObserver(subscriberKey, obs);
+          });
+        },
+
+        /* When a document is removed from the cursor... */
+        removed(_id) {
+          /* Prevent any more DDP operations when cancelled */
+          if (cancelled) return;
+
+          decrementDocCountAndRemoveIfZero(coll, _id);
+
+          /* Unregister the document subscriber from the observers... */
+
+          /* Recreate the subscriber key that was used when doc was added. */
+          const subscriberKey = createSubscriberKey(_id);
+
+          /* Retrieve the subscriber's observers from the registry */
+          const subscriberObservers =
+            observersBySubscribers.get(subscriberKey) || new Set();
+
+          /* Unsubscribe each observer linked to this doc subscriber. */
+          subscriberObservers.forEach((subObserver) =>
+            unsubscribeSubObserver(subscriberKey, subObserver)
+          );
+        },
+      };
+
+      const observer = await protocol.observe(
+        Coll,
+        actSelector,
+        observeCallbacks,
+        options
+      );
+
+      log(DEBUG.CREATED, debugKey);
+
+      /* If publication is already stopped, immediately stop and drop observer. */
+      if (publicationStopped) {
+        observer.stop();
+        observersByQuery.delete(queryKey);
+        resolveCreation(null);
+        return null;
+      }
+
+      /* === ENHANCE OBSERVER === */
+
+      /* Associate additional properties on observer */
+      observer.id = observerId;
+      observer.queryKey = queryKey;
+      observer.docsList = docsList;
+
+      /* Add a `cancel` method that stops the observer and cancels its descendants. */
+      observer.cancel = function () {
+        /* Do not process again when already cancelled */
+        if (cancelled) return;
+
+        /* Stop current observer */
+        observer.stop();
+
+        /* Unsubscribe or cancel all subObservers, then clear the list */
+        subObservers.forEach((subObserver) =>
+          subObserver.unsubscribeMaybeCancel()
+        );
+        subObservers.clear();
+
+        /* Retrieve all doc observers linked to the current `observerId`
+         * in the `observersBySubscribers` registry
+         * and unsubscribe them. */
+        [...observersBySubscribers.entries()].forEach(
+          ([subscriberKey, subObservers = new Set()]) => {
+            if (!isOwnSubscriberKey(subscriberKey)) return;
+
+            subObservers.forEach((subObserver) =>
+              subObserver.unsubscribeMaybeCancel(subscriberKey)
+            );
+
+            /* Remove stale registry entry now that this subscriber was fully unsubscribed. */
+            observersBySubscribers.delete(subscriberKey);
+          }
+        );
+
+        /* Maybe apply DDP removal for each of the observer's docs */
+        Array.from(docsList).forEach((completeDocId) => {
+          const [coll, _id] = completeDocId.split(COLL_DOC_SEPARATOR);
+          decrementDocCountAndRemoveIfZero(coll, _id);
+        });
+
+        /* Drop doc bookkeeping now that this observer is cancelled. */
+        docsList.clear();
+
+        /* Cancellation should have been triggered by a publication stop
+         * or subscriptions count dropping below one.
+         * Since only one observer can be registered for a query key,
+         * remove it from the registry when cancelled. */
+        observersByQuery.delete(queryKey);
+
+        /* Flag observer as cancelled */
+        cancelled = true;
+
+        log(DEBUG.CANCELLED, debugKey);
+      };
+
+      /* Add an `unsubscribe` method that allows a subscriber
+       * to stop its subscription. If subscriptions count
+       * drops below 1, also cancel the observer. */
+      observer.unsubscribeMaybeCancel = function (subscriberKey) {
+        if (observer.subscribers) {
+          observer.subscribers.delete(subscriberKey);
+          log(DEBUG.UNSUBSCRIBED, "from", debugKey, "by", subscriberKey);
+        }
+
+        /* Keep global registry tidy when unsubscribing directly. */
+        observersBySubscribers.pull(subscriberKey, observer);
+
+        if (!observer.subscribers || observer.subscribers.size < 1) {
+          observer.cancel();
+        }
+      };
+
+      /* Replace the placeholder with the actual observer
+       * by its query key for reusability */
+      observersByQuery.set(queryKey, observer);
+
+      resolveCreation(observer);
+      return observer;
+    } catch (error) {
+      /* Ensure no dangling placeholder */
+      observersByQuery.delete(queryKey);
+      rejectCreation(error);
+      throw error;
+    }
+  }
+
+  /* Add a subscriber key to an observer's list of subscribers
+   * and push subscriber in the `observersBySubscribers` global registry. */
+  function addSubscriber(subscriberKey, observer) {
+    const subscribers = observer.subscribers;
+
+    /* Add subscriber to the subscribers list or create the missing list */
+    if (subscribers) {
+      subscribers.add(subscriberKey);
+    } else {
+      observer.subscribers = new Set([subscriberKey]);
+    }
+
+    /* Save the observer in its subscriber's list of observers */
+    observersBySubscribers.push(subscriberKey, observer);
+  }
+
+  /* === AFTER INTERNAL FUNCTIONS === */
+
+  /* Create the main publication observer */
+  const observer = await createOrReuseObserver(args);
+
+  if (!observer) throw new Error("`publish` failed to create root observer");
+
+  /* Publication stop and cleanup function */
+  function stopPublication() {
+    publicationStopped = true;
+
+    /* Immediately stop main observer. */
+    observer.cancel();
+
+    /* Stop all registered observers. */
+    observersByQuery.forEach((observer) => observer?.cancel?.());
+
+    /* Clear the registry maps.
+     * Probably redundant since registries are inside the publication closure. */
+    observersByQuery.clear();
+    observersBySubscribers.clear();
+
+    log(DEBUG.STOPPED);
+  }
+
+  const handle = {
+    stop: stopPublication,
+  };
+
+  /* Call the stop function when publication is stopped */
+  publication.onStop?.(handle.stop);
+
+  /* Mark publication as ready after everything has been set up. */
+  publication.ready();
+
+  log(DEBUG.READY);
+
+  /* Return an object with a `stop` method
+   * to mimick a regular observer returned value. */
+  return handle;
+}
+
+/* === HELPERS === */
+
+/* Create an enhanced Map that can manipulate nested Set values. */
+function createRegistry() {
+  const registry = new Map();
+
+  /* Find a value in a nested Set */
+  registry.find = function (
+    key, // Key in the Map
+    pred // (value) Predicate function to apply to Set values
+  ) {
+    const set = registry.get(key);
+    if (!set) return undefined;
+
+    return [...set.values()].find(pred);
+  };
+
+  /* Push a value to a nested Set */
+  registry.push = function (key, val) {
+    const set = registry.get(key);
+
+    if (set) {
+      set.add(val);
+    } else {
+      registry.set(key, new Set([val]));
+    }
+
+    return registry;
+  };
+
+  /* Pull a value from a nested Set */
+  registry.pull = function (key, val) {
+    /* If registry doesn't have the key, do nothing */
+    if (!registry.has(key)) return registry;
+
+    const set = registry.get(key);
+
+    if (set) {
+      /* If set is found, just remove value from it */
+      set.delete(val);
+
+      /* If item removal from set leads to an empty set,
+       * remove the key from the registry to prevent memory leaks. */
+      if (!set.size) registry.delete(key);
+    }
+
+    return registry;
+  };
+
+  return registry;
+}
+
+/* Stringify arguments to collection cursor to create a key for debug messages */
+function createDebugKey(Coll, selector = {}) {
+  const protocol = getProtocol();
+  return [protocol.getName(Coll), protocol.stringify(selector)].join(
+    KEY_SEPARATOR
+  );
+}
+
+/* Stringify arguments to collection cursor to create a unique identifier */
+function createQueryKey(Coll, selector = {}, options = {}) {
+  const protocol = getProtocol();
+  const { fields, limit, skip, sort } = options;
+
+  return (
+    createDebugKey(Coll, selector) +
+    [fields, sort, limit, skip]
+      .filter((x) => x !== undefined)
+      .map((x) => {
+        if (isObj(x)) return protocol.stringify(x);
+        return x.toString();
+      })
+      .join(KEY_SEPARATOR)
+  );
+}
+
+async function deriveArgsByQueryKey(ancestors, children) {
+  if (!children?.length) return new Map();
+
+  const entries = await Promise.all(
+    children.map(async (childArgs) => {
+      const { Coll, selector, children, ...options } = childArgs;
+
+      /* If `selector` is a function, derive actual selector.
+       * Otherwise, use `selector` as it is. */
+      const actSelector = await interpretSelector(selector, ancestors);
+
+      /* Create a key from the cursor arguments so it can be reused. */
+      const queryKey = createQueryKey(Coll, actSelector, options);
+
+      return [queryKey, childArgs];
+    })
+  );
+
+  return new Map(entries);
+}
+
+/* Selector that will always return nothing, since _id is always mandatory */
+const VOID_SELECTOR = { _id: { $exists: false } };
+
+/* Take all children publications arguments and derive
+ * a single function of `(fields, ...ancestors) => bool`
+ * for which a thruthy result will trigger observers invalidation.
+ * If any child publication doesn't specify any deps (implicity or explicit),
+ * force observers invalidation on each parent document change. */
+function interpretFieldDeps(children) {
+  if (!children?.length) return () => false;
+
+  /* Reduce into a Set of true, false, String, function */
+  const depsAsSet = children.reduce((acc, childArgs) => {
+    /* Negating the accumulator short-circuits the reduce */
+    if (!acc) return undefined;
+
+    /* Returns a boolean, an array, a function or undefined */
+    const deps = deriveArgsDeps(childArgs);
+
+    /* If any child is true or undefined, return `true`
+     * to short-circuit reducing process
+     * and force observers invalidation. */
+    if (deps === true || deps === undefined) return true;
+
+    /* Array deps is an array, add each one to the accumulator Set */
+    if (isArr(deps)) {
+      deps.forEach((dep) => acc.add(dep));
+    } else {
+      /* Any other case of `deps` is directly added to the accumulator */
+      acc.add(deps);
+    }
+
+    return acc;
+  }, new Set());
+
+  /* If combined deps returns true, return an always true function */
+  if (depsAsSet === true) return () => true;
+
+  /* Transform each dep element into an individual invalidation function. */
+  const depsFns = [...depsAsSet].map((dep) => {
+    return async function (fields, ...ancestors) {
+      if (typeof dep === "boolean") return dep;
+
+      /* A function dep should return the same type of list as `deps` argument,
+       * ie a list of keys to watch in the changed `fields`.
+       * If it returns a falsy value, it will be treated as undefined deps
+       * and trigger observers invalidation each time. */
+      if (isFunc(dep)) {
+        const res = await dep(fields, ...ancestors);
+        if (isArr(res)) return res.some((key) => Object.hasOwn(fields, key));
+
+        return !res;
+      }
+
+      /* A key dep will simply check if it is included in the changed `fields` */
+      if (typeof dep === "string") return Object.hasOwn(fields, dep);
+
+      /* Any other type is invalid and will trigger invalidation */
+      return true;
+    };
+  });
+
+  /* Combine all individual invalidation functions into a single one
+   * so it is easier to use directly on fields change. */
+  return async (...args) => {
+    /* Use a `for..of` loop to short-circuit further evaluation
+     * as soon as an invalidation function returns true. */
+    for (const depsFn of depsFns) {
+      const shouldInvalidate = await depsFn(...args);
+      if (shouldInvalidate) return true;
+    }
+
+    return false;
+  };
+}
+
+/* Derive a list of props or a function
+ * that will eventually derive such a list
+ * from the arguments to `createOrReuseObserver`.
+ * Any `undefined` deps will force observers invalidation. */
+function deriveArgsDeps({ deps, selector }) {
+  const normalizedDeps = normalizeDeps(deps);
+
+  /* true or false normalized deps should have precedance */
+  if (typeof normalizedDeps === "boolean") return normalizedDeps;
+
+  /* If selector is static and deps are undefined,
+   * return an empty list, because nothing should make it rerun. */
+  if (isObj(selector) && normalizedDeps === undefined) return [];
+
+  /* Only array selector will generate additional implicit deps */
+  if (!isArr(selector)) return normalizedDeps;
+
+  /* If selector is an array, derive implicit deps from it. */
+  const [from] = selector;
+
+  /* `from` can be either a prop or a nested array prop */
+  const implicitDep = isArr(from) ? from[0] : from;
+
+  if (isArr(normalizedDeps)) return [implicitDep, ...normalizedDeps];
+  if (isFunc(normalizedDeps)) return [implicitDep, normalizedDeps];
+  return [implicitDep];
+}
+
+/* Normalize deps to return either
+ * - true = always invalidate
+ * - false = never invalidate
+ * - [] = List of keys the changed `fields` must include to invalidate
+ * - Function (fields, ...ancestors) => normalized deps */
+function normalizeDeps(deps) {
+  /* `undefined` deps is a special case where user didn't specify anything. */
+  if (deps === undefined) return undefined;
+
+  /* Returns a boolean */
+  if (typeof deps === "boolean") return deps;
+
+  /* Returns a function */
+  if (isFunc(deps)) {
+    return async (...args) => {
+      const res = await deps(...args);
+      return normalizeDeps(res);
+    };
+  }
+
+  /* Returns an array */
+  if (isArr(deps)) return deps;
+  if (deps instanceof Set) return [...deps];
+  if (typeof deps === "string") return [deps];
+
+  /* Any other scenario is considered as no invalidation. */
+  return false;
+}
+
+async function interpretSelector(selector, ancestors = []) {
+  if (!selector) return VOID_SELECTOR;
+
+  /* Function selector `(parent, ...ancestors) => selector` */
+  if (isFunc(selector)) {
+    const computedSelector = await selector(...ancestors);
+    if (computedSelector) return computedSelector;
+
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[`publish`]: `selector` function should produce a valid selector object"
+    );
+
+    return VOID_SELECTOR;
+  }
+
+  /* `selector` can be an array where:
+   * - first element is the join prop from the parent document
+   * - second element is the join prop to the child documents
+   * - third element is an additional selector to consider */
+  if (isArr(selector)) {
+    const [parent] = ancestors || [];
+
+    /* Array selector needs a parent. */
+    if (!parent) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[`publish`]: A parent is necessary to use a join selector."
+      );
+      return VOID_SELECTOR;
+    }
+
+    const [from, to, toSelector] = selector;
+
+    /* If first element is an array as in `[["propToChildrenVals"], "childProp"]`,
+     * `childrenPropVals` on parent document contains a list
+     * of values associated with the joined `childProp`. */
+    const fromArray = isArr(from);
+
+    /* If second element is an array as in `["parentProp", ["propToParentVals"]]`,
+     * `propToParentVals` on children documents contain lists of values
+     * associated with the joined `parentProp`. */
+    const toArray = isArr(to);
+
+    let joinSelector;
+
+    /* ["propToChildVal", "childProp"] */
+    if (!fromArray && !toArray) {
+      const parentValue = parent[from];
+      if (parentValue === undefined) return VOID_SELECTOR;
+      joinSelector = { [to]: parentValue };
+    }
+
+    /* [["propToChildrenVals"], "childProp"] */
+    if (fromArray && !toArray) {
+      const parentValues = parent[from[0]];
+      if (parentValues === undefined) return VOID_SELECTOR;
+      joinSelector = { [to]: { $in: parentValues || [] } };
+    }
+
+    /* ["parentProp", ["propToParentVals"]] */
+    if (!fromArray && toArray) {
+      const parentValue = parent[from];
+      if (parentValue === undefined) return VOID_SELECTOR;
+      joinSelector = { [to[0]]: { $elemMatch: { $eq: parentValue } } };
+    }
+
+    /* [["propToChildrenVals"], ["propToParentVals"]] */
+    if (fromArray && toArray) {
+      const parentValues = parent[from[0]];
+      if (parentValues === undefined) return VOID_SELECTOR;
+      joinSelector = { [to[0]]: { $elemMatch: { $in: parentValues || [] } } };
+    }
+
+    /* Unlikely because all four cases have been considered... */
+    if (!joinSelector) return VOID_SELECTOR;
+
+    return !toSelector ? joinSelector : { ...toSelector, ...joinSelector };
+  }
+
+  /* Static plain object selector */
+  if (typeof selector === "object") return selector;
+
+  /* Default to null selector */
+  return VOID_SELECTOR;
+}
+
+function createDebugLog(debug) {
+  return function log(location, ...content) {
+    if (debug && (debug === true || debug?.[location])) {
+      // eslint-disable-next-line no-console
+      console.log(location, ...content);
+    }
+  };
+}

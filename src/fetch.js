@@ -201,6 +201,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
                         }, {});
 
                     return readyDocs.map((doc) => {
+                      // eslint-disable-next-line no-useless-assignment
                       let joinedDocs = [];
 
                       if (toArray) {
