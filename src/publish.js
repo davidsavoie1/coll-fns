@@ -449,7 +449,7 @@ async function runPublication(publication, args = {}) {
             validChildren
           );
 
-          const missingEntries = [...newArgsByQueryKey.entries()].reduce(
+          const missingEntries = Array.from(newArgsByQueryKey.entries()).reduce(
             (acc, [queryKey, args]) => {
               if (currObserversByQueryKey.has(queryKey)) return acc;
               return [...acc, args];
@@ -547,7 +547,7 @@ async function runPublication(publication, args = {}) {
         /* Retrieve all doc observers linked to the current `observerId`
          * in the `observersByFollowers` registry
          * and unfollow them. */
-        [...observersByFollowers.entries()].forEach(
+        Array.from(observersByFollowers.entries()).forEach(
           ([followerKey, subObservers = new Set()]) => {
             if (!isOwnFollowerKey(followerKey)) return;
 
@@ -684,7 +684,7 @@ function createRegistry() {
     const set = registry.get(key);
     if (!set) return undefined;
 
-    return [...set.values()].find(pred);
+    return Array.from(set.values()).find(pred);
   };
 
   /* Push a value to a nested Set */
@@ -806,7 +806,7 @@ function interpretFieldDeps(children) {
   if (depsAsSet === true) return () => true;
 
   /* Transform each dep element into an individual invalidation function. */
-  const depsFns = [...depsAsSet].map((dep) => {
+  const depsFns = Array.from(depsAsSet).map((dep) => {
     return async function (fields, ...ancestors) {
       if (typeof dep === "boolean") return dep;
 
