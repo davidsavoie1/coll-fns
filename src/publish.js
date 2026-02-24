@@ -62,7 +62,7 @@ const DEBUG = {
  * @property {PublishSelector} [selector] Backward-compatible alias for `on`.
  * @property {Object} [fields]
  * @property {PublishDeps} [deps]
- * @property {PublishChildArgs[]} [children]
+ * @property {(PublishChildArgs|false|null|undefined)[]} [children]
  * @property {boolean|Object} [debug]
  */
 
@@ -72,7 +72,7 @@ const DEBUG = {
  * @property {*} Coll
  * @property {PublishSelector} selector Root selector passed as `publish(..., selector, ...)`.
  * @property {Object} [fields]
- * @property {PublishChildArgs[]} [children]
+ * @property {(PublishChildArgs|false|null|undefined)[]} [children]
  * @property {PublishDeps} [deps]
  * @property {boolean|Object} [debug]
  */
@@ -1037,7 +1037,7 @@ function createTokensRegistry() {
  * Child arguments are normalized when each child observer is created.
  *
  * Rules:
- * - every child must be an object
+ * - every child must be an object or a falsy value to ignore
  * - a join key cannot be declared both explicitly in `children`
  *   and implicitly in parent `fields` join section
  * - parent own fields are separated from join fields and only own fields
@@ -1060,15 +1060,19 @@ function normalizeArgs({
 
   const joinKeys = Object.keys(joinFields);
 
-  const normalizedChildren = children.map((childArgs) => {
+  const normalizedChildren = children.reduce((acc, childArgs) => {
+    if (!childArgs) {
+      return acc;
+    }
+
     if (!isObj(childArgs)) {
       const protocol = getProtocol();
       throw new Error(
-        `Each child of '${protocol.getName(Coll)}' collection must be an object.`
+        `Each child of '${protocol.getName(Coll)}' collection must be an object or a falsy value to ignore.`
       );
     }
 
-    if (!childArgs.join) return childArgs;
+    if (!childArgs.join) return [...acc, childArgs];
     const { join: explicitJoinKey, ...rest } = childArgs;
 
     if (joinKeys.includes(explicitJoinKey)) {
@@ -1077,8 +1081,8 @@ function normalizeArgs({
       );
     }
 
-    return joinToArgs(Coll, explicitJoinKey, rest);
-  });
+    return [...acc, joinToArgs(Coll, explicitJoinKey, rest)];
+  }, []);
 
   const additionalJoinChildren = joinKeys.map((joinKey) =>
     joinToArgs(Coll, joinKey, { debug, fields: joinFields[joinKey] })

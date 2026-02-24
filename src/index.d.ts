@@ -176,14 +176,14 @@ export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
   /** Backward-compatible alias for `on`. */
   selector?: PublishSelector<TParent>;
   fields?: FieldSpec;
-  children?: PublishChildArgs<TParent>[];
+  children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
   deps?: PublishDeps<TParent>;
   debug?: boolean | Record<string, boolean>;
 }
 
 export interface PublishOptions<TParent = AnyObject> extends AnyObject {
   fields?: FieldSpec;
-  children?: PublishChildArgs<TParent>[];
+  children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
   deps?: PublishDeps<TParent>;
   debug?: boolean | Record<string, boolean>;
   maxConcurrent?: number;

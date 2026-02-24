@@ -1781,7 +1781,11 @@ If `ready` is missing, `publish()` throws.
 
 ## How child declarations work
 
-`children` entries must be objects and can be defined with either:
+`children` entries can be objects or falsy values (`false`, `null`, `undefined`).
+Falsy entries are ignored, which allows short-circuit declarations like
+`isEnabled && { ...childArgs }`.
+
+Object entries can be defined with either:
 
 - explicit child args:
   - `{ Coll, on, fields?, deps?, children?, ...cursorOptions }`
