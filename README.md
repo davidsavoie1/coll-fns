@@ -1875,7 +1875,7 @@ For array selectors, implicit deps are auto-derived from the `from` key.
 
 Examples of event names include:
 
-- `CREATING`, `CREATED`, `REUSED`
+- `CREATED`, `REUSED`
 - `INVALIDATED`
 - `DOC_ADDED`, `DOC_CHANGED`, `DOC_REMOVED`
 - `CANCELLED`, `UNFOLLOWED`, `STOPPED`, `READY`

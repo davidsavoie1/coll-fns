@@ -15,7 +15,7 @@ const DEBUG = {
   BYPASSED: "BYPASSED",
   CANCELLED: "CANCELLED",
   CREATED: "CREATED",
-  CREATING: "CREATING",
+  // CREATING: "CREATING",
   INVALIDATED: "INVALIDATED",
   DOC_ADDED: "DOC_ADDED",
   DOC_CHANGED: "DOC_CHANGED",
@@ -360,7 +360,7 @@ async function runPublication(publication, args = {}) {
     /* === CREATE OBSERVER === */
 
     try {
-      log(DEBUG.CREATING, debugKey);
+      // log(DEBUG.CREATING, debugKey);
 
       /* No need to create an observer for VOID_SELECTOR. Bypass by returning null. */
       if (actSelector === VOID_SELECTOR) {
