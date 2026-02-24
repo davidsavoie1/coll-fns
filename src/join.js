@@ -109,7 +109,7 @@ export function join(Collection, joins) {
     const joinType = typeOf(on);
     if (!KNOWN_TYPES.includes(joinType)) {
       throw new Error(
-        `Join '${key}' has an unrecognized 'on' condition type of '${joinType}'. Should be one of '${knownTypesCaption}'.`,
+        `Join '${key}' has an unrecognized 'on' condition type of '${joinType}'. Should be one of '${knownTypesCaption}'.`
       );
     }
 
@@ -117,7 +117,7 @@ export function join(Collection, joins) {
     // Encourage declaring the base fields required so callers don't forget them.
     if (isFunc(on) && !fields) {
       warn(
-        `Join '${key}' is defined with a function 'on', but no 'fields' are explicitly specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`,
+        `Join '${key}' is defined with a function 'on', but no 'fields' are explicitly specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`
       );
     }
   });

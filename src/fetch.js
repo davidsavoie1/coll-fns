@@ -94,22 +94,13 @@ export function fetchList(Coll, selector = {}, options = {}) {
     }),
 
     (docs) => {
-      // Partition joins by "on" type to process differently
-      const joinsByType = usedJoinKeys.reduce((acc, joinKey) => {
-        const join = joins[joinKey];
-        if (!join) return acc;
-
-        const type = typeOf(join.on);
-        const enhancedJoin = { ...join, _key: joinKey };
-        const prev = acc[type] || [];
-        return { ...acc, [type]: [...prev, enhancedJoin] };
-      }, {});
+      /* Partition joins by "on" type to process differently */
 
       const {
         array: arrJoins = [],
         object: objJoins = [],
         function: fnJoins = [],
-      } = joinsByType;
+      } = partitionJoinsByType(usedJoinKeys, joins);
 
       // Process array-type joins: [fromProp, toProp, toSelector?]
       return then(
@@ -436,4 +427,18 @@ function createJoinFetcher({
       );
     }
   );
+}
+
+function partitionJoinsByType(usedJoinKeys = [], joins = {}) {
+  const joinsByType = usedJoinKeys.reduce((acc, joinKey) => {
+    const join = joins[joinKey];
+    if (!join) return acc;
+
+    const type = typeOf(join.on);
+    const enhancedJoin = { ...join, _key: joinKey };
+    const prev = acc[type] || [];
+    return { ...acc, [type]: [...prev, enhancedJoin] };
+  }, {});
+
+  return joinsByType;
 }

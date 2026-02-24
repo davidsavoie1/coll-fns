@@ -3,6 +3,8 @@ import { getProtocol } from "./protocol";
 import { fetchOne } from "./fetch";
 import { isArr, isFunc, isObj } from "./util";
 import { createPool } from "./pool";
+import { dispatchFields } from "./fields";
+import { getJoins } from "./join";
 
 const MAX_CONCURRENT = 10; // Maximum number of concurrent observer creation processed
 
@@ -24,7 +26,7 @@ const DEBUG = {
   UNSUBSCRIBED: "UNSUBSCRIBED",
 };
 
-export default async function publish(
+export async function publish(
   publication, // { added, changed, removed, ready, error, onStop }.
   args = {}, // Publication arguments
   options = {}
@@ -74,14 +76,7 @@ async function runPublication(publication, args = {}, options = {}) {
 
   async function createOrReuseObserver(
     /* Public arguments passed from publication function */
-    {
-      Coll, // Meteor collection instance
-      selector, // Object litteral or function that receives ancestors as arguments
-      children = [], // [...{ ...args }] List of arguments to children observers. Non object arguments will be omitted, so they can be conditionally defined.
-      deps, // Optional. List of parent field dependencies that must change to invalidate observers.
-      debug, // Should debugging messages be displayed? true will log all. Otherwise, an object of predefined location can be used with thruthy or falsy value to log or not
-      ...options // Cursor options
-    } = {},
+    args = {},
 
     /* Internal arguments */
     {
@@ -93,6 +88,15 @@ async function runPublication(publication, args = {}, options = {}) {
     if (!selector) {
       throw new Error(`'selector' is necessary to create an observer.`);
     }
+
+    const {
+      Coll, // Meteor collection instance
+      selector, // Object litteral or function that receives ancestors as arguments
+      children = [], // [...{ ...args }] List of arguments to children observers. Non object arguments will be omitted, so they can be conditionally defined.
+      deps, // Optional. List of parent field dependencies that must change to invalidate observers.
+      debug, // Should debugging messages be displayed? true will log all. Otherwise, an object of predefined location can be used with thruthy or falsy value to log or not
+      ...options // Cursor options
+    } = normalizeArgs(args);
 
     const log = createDebugLog(debug);
 
@@ -117,8 +121,8 @@ async function runPublication(publication, args = {}, options = {}) {
     /* Flat list of all subObservers for this observer only (closure) */
     const subObservers = new Set();
 
-    /* If `selector` is a function, derive actual selector.
-     * Otherwise, use `selector` as it is. */
+    /* Selector might be an object, a function or an array.
+     * Interpret it first so that an actual object selector remains. */
     const actSelector = await interpretSelector(selector, ancestors);
 
     /* Simplified key for debugging purposes */
@@ -922,5 +926,100 @@ function createTokensRegistry() {
     remove(subscriberKey) {
       registry.delete(subscriberKey);
     },
+  };
+}
+
+/* Normalize publication args so children can be expressed either as:
+ * - fully explicit child args (`{ Coll, selector, ... }`)
+ * - join shorthand (`{ join: "joinKey", ... }`)
+ *
+ * It also derives additional implicit children from requested join fields.
+ * Child arguments are normalized when each child observer is created.
+ *
+ * Rules:
+ * - every child must be an object
+ * - a join key cannot be declared both explicitly in `children`
+ *   and implicitly in parent `fields` join section
+ * - parent own fields are separated from join fields and only own fields
+ *   remain on the normalized parent args
+ */
+function normalizeArgs({
+  Coll,
+  children = [],
+  deps,
+  debug,
+  fields,
+  selector,
+  ...rest
+}) {
+  const joins = getJoins(Coll);
+
+  /* Partition field spec into own (base collection) and join fields ('+') */
+  const { _: ownFields, "+": joinFields = {} } = dispatchFields(fields, joins);
+
+  const joinKeys = Object.keys(joinFields);
+
+  const normalizedChildren = children.map((childArgs) => {
+    if (!isObj(childArgs)) {
+      const protocol = getProtocol();
+      throw new Error(
+        `Each child of '${protocol.getName(Coll)}' collection must be an object.`
+      );
+    }
+
+    if (!childArgs.join) return childArgs;
+    const { join: explicitJoinKey, ...rest } = childArgs;
+
+    if (joinKeys.includes(explicitJoinKey)) {
+      throw new Error(
+        `Join '${explicitJoinKey}' is defined both in parent fields and as an explicit child. Choose one or the other.`
+      );
+    }
+
+    return joinToArgs(Coll, explicitJoinKey, rest);
+  });
+
+  const additionalJoinChildren = joinKeys.map((joinKey) =>
+    joinToArgs(Coll, joinKey, { debug, fields: joinFields[joinKey] })
+  );
+
+  /* If no additional joins, return args almost unchanged */
+  return {
+    Coll,
+    selector,
+    fields: ownFields,
+    children: [...normalizedChildren, ...additionalJoinChildren],
+    deps,
+    debug,
+    ...rest,
+  };
+}
+
+/* Expand a join key declared on a parent collection into full child args.
+ *
+ * Returned child args inherit selector/deps/limit from the join definition,
+ * and can be overridden with `rest` (for example `fields`, `children`, `sort`...).
+ * It intentionally does not recursively normalize descendants here.
+ * Descendant args are normalized later when their own observer is created.
+ */
+function joinToArgs(Coll, joinKey, rest) {
+  const join = getJoins(Coll)?.[joinKey];
+
+  if (!join) {
+    const protocol = getProtocol();
+
+    throw new Error(
+      `Join '${joinKey}' is not defined on collection '${protocol.getName(Coll)}'.`
+    );
+  }
+
+  const { Coll: ChildColl, on, fields, limit, single } = join;
+
+  return {
+    Coll: ChildColl,
+    selector: on,
+    deps: fields,
+    limit: single ? 1 : limit,
+    ...rest,
   };
 }
