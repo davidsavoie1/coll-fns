@@ -134,7 +134,7 @@ And since it uses a protocol, it can be used with the **native MongoDB driver** 
 
 </details>
 
-<details style="margin-bottom: 1rem">
+<details>
 <summary><strong>Functional API</strong></summary>
 
 A lot of libraries that add functionalities to the database layer mutate the collection instances themselves or, when more respectful, offer ways to extend the collection constructor somehow.
@@ -148,6 +148,26 @@ Instead of mutating the collections themselves, **joins and hooks definitions ar
 Doing so makes it easy to offer a protocol interface: **the type of collection involved doesn't matter at all**. Heck, the collections could even be table names as strings and it would still work (if you implement a custom protocol)!
 
 For Meteor developers, it also means being able to enhance the `Meteor.users` collection itself... event without access to instantiation code! 🤓
+
+</details>
+
+<details style="margin-bottom: 1rem">
+<summary><strong>Nested reactive publications</strong></summary>
+
+In Meteor in particular, publication of data over DDP that gets synced on the client in Minimongo is very convenient. It makes for really reactive applications where data doesn't get stale. Optimistic UI optimizations is built-in and doesn't require additional complex logic.
+
+However, it can get **difficult to publish exactly the right documents**, especially when using a very useful library that allows joining collections together and keeping data much more normalized!
+
+Although returning Meteor cursors from a publish function is still the most optimized path, it sometimes makes sense to **publish children documents based on their relationship with their parent**. But doing so is usually very difficult to implement.
+
+Some existing community libraries that promise to do so either:
+
+- don't actually work (might understand `added` and `removed` callbacks, but won't react to updates)
+- are too simplistic (cause a lot of duplicated observers)
+- come with a much more complex data layer
+- add somewhat unpredictable reactivity on the server.
+
+Since `coll-fns` is already very good at understanding relationships, a `publish` helper was introduced to allow such fine-tuned reactivity out of the box. 💪
 
 </details>
 
