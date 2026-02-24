@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid/non-secure";
 import { getProtocol } from "./protocol";
 import { fetchOne } from "./fetch";
-import { isArr, isFunc, isObj } from "./util";
+import { hasOwn, isArr, isFunc, isObj } from "./util";
 import { createPool } from "./pool";
 import { dispatchFields } from "./fields";
 import { getJoins } from "./join";
@@ -816,13 +816,13 @@ function interpretFieldDeps(children) {
        * and trigger observers invalidation each time. */
       if (isFunc(dep)) {
         const res = await dep(fields, ...ancestors);
-        if (isArr(res)) return res.some((key) => Object.hasOwn(fields, key));
+        if (isArr(res)) return res.some((key) => hasOwn(fields, key));
 
         return !res;
       }
 
       /* A key dep will simply check if it is included in the changed `fields` */
-      if (typeof dep === "string") return Object.hasOwn(fields, dep);
+      if (typeof dep === "string") return hasOwn(fields, dep);
 
       /* Any other type is invalid and will trigger invalidation */
       return true;

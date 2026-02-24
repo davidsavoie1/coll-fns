@@ -338,3 +338,10 @@ export function fireAndForget(fn, onError) {
     if (isFunc(onError)) onError(err);
   }
 }
+
+/* Check if an object has own property key. */
+export function hasOwn(obj, key) {
+  return Object.hasOwn
+    ? Object.hasOwn(obj, key)
+    : Object.prototype.hasOwnProperty.call(obj, key);
+}
