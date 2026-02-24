@@ -170,6 +170,8 @@ export type PublishDeps<TParent = AnyObject> =
 export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
   Coll?: any;
   join?: string;
+  on?: PublishSelector<TParent>;
+  /** Backward-compatible alias for `on`. */
   selector?: PublishSelector<TParent>;
   fields?: FieldSpec;
   children?: PublishChildArgs<TParent>[];
@@ -177,13 +179,12 @@ export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
   debug?: boolean | Record<string, boolean>;
 }
 
-export interface PublishArgs<TParent = AnyObject> extends AnyObject {
-  Coll: any;
-  selector: PublishSelector<TParent>;
+export interface PublishOptions<TParent = AnyObject> extends AnyObject {
   fields?: FieldSpec;
   children?: PublishChildArgs<TParent>[];
   deps?: PublishDeps<TParent>;
   debug?: boolean | Record<string, boolean>;
+  maxConcurrent?: number;
 }
 
 export interface PublicationContext {
@@ -193,10 +194,6 @@ export interface PublicationContext {
   ready: () => void;
   error?: (error: unknown) => void;
   onStop?: (fn: () => void) => void;
-}
-
-export interface PublishOptions {
-  maxConcurrent?: number;
 }
 
 export function count<TColl>(
@@ -258,7 +255,8 @@ export function configurePool(config?: PoolConfig): void;
 
 export function publish(
   publication: PublicationContext,
-  args?: PublishArgs,
+  Coll: any,
+  selector: PublishSelector,
   options?: PublishOptions
 ): MaybePromise<{ stop: () => void }>;
 

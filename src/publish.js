@@ -54,11 +54,12 @@ const DEBUG = {
 
 /**
  * Child publication args for nested observers.
- * May be explicit (`Coll` + `selector`) or join shorthand (`join` key).
+ * May be explicit (`Coll` + `on`) or join shorthand (`join` key).
  * @typedef {Object} PublishChildArgs
  * @property {*} [Coll]
  * @property {string} [join]
- * @property {PublishSelector} [selector]
+ * @property {PublishSelector} [on]
+ * @property {PublishSelector} [selector] Backward-compatible alias for `on`.
  * @property {Object} [fields]
  * @property {PublishDeps} [deps]
  * @property {PublishChildArgs[]} [children]
@@ -69,7 +70,7 @@ const DEBUG = {
  * Root publish args.
  * @typedef {Object} PublishArgs
  * @property {*} Coll
- * @property {PublishSelector} selector
+ * @property {PublishSelector} selector Root selector passed as `publish(..., selector, ...)`.
  * @property {Object} [fields]
  * @property {PublishChildArgs[]} [children]
  * @property {PublishDeps} [deps]
@@ -86,19 +87,21 @@ const DEBUG = {
  * Create a reactive publication tree using protocol observation + nested children.
  *
  * `children` can be declared in two ways:
- * - explicit child args (`{ Coll, selector, ... }`)
+ * - explicit child args (`{ Coll, on, ... }`)
  * - join shorthand (`{ join: "joinKey", ... }`) resolved from `join()` definitions
  *
  * Join children can also be derived implicitly from parent `fields`.
  *
  * @param {PublicationContext} publication Publication callbacks context.
- * @param {PublishArgs} [args={}] Root publication arguments.
+ * @param {*} Coll Root collection.
+ * @param {PublishSelector} selector Root selector.
  * @param {PublishOptions} [options={}] Internal scheduling options.
  * @returns {Promise<{stop: Function}>} Handle with a `stop` method.
  */
 export async function publish(
-  publication, // { added, changed, removed, ready, error, onStop }.
-  args = {}, // Publication arguments
+  publication, // { added, changed, removed, ready, error, onStop }
+  Coll,
+  selector,
   options = {}
 ) {
   if (!isFunc(publication.ready)) {
@@ -107,8 +110,10 @@ export async function publish(
     );
   }
 
+  const args = { ...options, Coll, selector };
+
   try {
-    return await runPublication(publication, args, options);
+    return await runPublication(publication, args);
   } catch (error) {
     if (isFunc(publication.error)) {
       publication.error(error);
@@ -127,8 +132,11 @@ export async function publish(
  * @param {PublishOptions} [options={}]
  * @returns {Promise<{stop: Function}>}
  */
-async function runPublication(publication, args = {}, options = {}) {
+async function runPublication(publication, args = {}) {
   const log = createDebugLog(args.debug);
+
+  /* Remove options that are relevant (or should be discarded) only on root */
+  const { maxConcurrent, on, ...rest } = args;
 
   /* Publication-level stop flag to prevent late observers from leaking. */
   let publicationStopped = false;
@@ -146,7 +154,7 @@ async function runPublication(publication, args = {}, options = {}) {
   const observersCountByDoc = createRegistry();
 
   const pool = createPool({
-    maxConcurrent: options?.maxConcurrent ?? MAX_CONCURRENT,
+    maxConcurrent: maxConcurrent ?? MAX_CONCURRENT,
     maxPending: Infinity,
   });
 
@@ -164,18 +172,19 @@ async function runPublication(publication, args = {}, options = {}) {
   ) {
     if (publicationStopped) return null;
 
-    if (!selector) {
-      throw new Error(`'selector' is necessary to create an observer.`);
-    }
-
     const {
       Coll, // Meteor collection instance
       selector, // Object litteral or function that receives ancestors as arguments
       children = [], // [...{ ...args }] List of arguments to children observers. Non object arguments will be omitted, so they can be conditionally defined.
       deps, // Optional. List of parent field dependencies that must change to invalidate observers.
       debug, // Should debugging messages be displayed? true will log all. Otherwise, an object of predefined location can be used with thruthy or falsy value to log or not
+      on = selector, // Link to parent document that will get interpreted as a selector
       ...options // Cursor options
     } = normalizeArgs(args);
+
+    if (!selector && !on) {
+      throw new Error(`'selector' or 'on' is necessary to create an observer.`);
+    }
 
     const log = createDebugLog(debug);
 
@@ -202,7 +211,7 @@ async function runPublication(publication, args = {}, options = {}) {
 
     /* Selector might be an object, a function or an array.
      * Interpret it first so that an actual object selector remains. */
-    const actSelector = await interpretSelector(selector, ancestors);
+    const actSelector = await interpretSelector(on, ancestors);
 
     /* Simplified key for debugging purposes */
     const debugKey = createDebugKey(Coll, actSelector);
@@ -622,7 +631,7 @@ async function runPublication(publication, args = {}, options = {}) {
   /* === AFTER INTERNAL FUNCTIONS === */
 
   /* Create the main publication observer */
-  const observer = await createOrReuseObserver(args);
+  const observer = await createOrReuseObserver(rest);
 
   if (!observer) throw new Error("`publish` failed to create root observer");
 
@@ -744,11 +753,9 @@ async function deriveArgsByQueryKey(ancestors, children) {
 
   const entries = await Promise.all(
     children.map(async (childArgs) => {
-      const { Coll, selector, children, ...options } = childArgs;
+      const { Coll, selector, children, on = selector, ...options } = childArgs;
 
-      /* If `selector` is a function, derive actual selector.
-       * Otherwise, use `selector` as it is. */
-      const actSelector = await interpretSelector(selector, ancestors);
+      const actSelector = await interpretSelector(on, ancestors);
 
       /* Create a key from the cursor arguments so it can be reused. */
       const queryKey = createQueryKey(Coll, actSelector, options);
@@ -840,7 +847,7 @@ function interpretFieldDeps(children) {
  * that will eventually derive such a list
  * from the arguments to `createOrReuseObserver`.
  * Any `undefined` deps will force observers invalidation. */
-function deriveArgsDeps({ deps, selector }) {
+function deriveArgsDeps({ deps, selector, on = selector }) {
   const normalizedDeps = normalizeDeps(deps);
 
   /* true or false normalized deps should have precedance */
@@ -848,13 +855,13 @@ function deriveArgsDeps({ deps, selector }) {
 
   /* If selector is static and deps are undefined,
    * return an empty list, because nothing should make it rerun. */
-  if (isObj(selector) && normalizedDeps === undefined) return [];
+  if (isObj(on) && normalizedDeps === undefined) return [];
 
   /* Only array selector will generate additional implicit deps */
-  if (!isArr(selector)) return normalizedDeps;
+  if (!isArr(on)) return normalizedDeps;
 
   /* If selector is an array, derive implicit deps from it. */
-  const [from] = selector;
+  const [from] = on;
 
   /* `from` can be either a prop or a nested array prop */
   const implicitDep = isArr(from) ? from[0] : from;
@@ -1023,7 +1030,7 @@ function createTokensRegistry() {
 }
 
 /* Normalize publication args so children can be expressed either as:
- * - fully explicit child args (`{ Coll, selector, ... }`)
+ * - fully explicit child args (`{ Coll, on, ... }`)
  * - join shorthand (`{ join: "joinKey", ... }`)
  *
  * It also derives additional implicit children from requested join fields.
@@ -1043,6 +1050,7 @@ function normalizeArgs({
   debug,
   fields,
   selector,
+  on = selector,
   ...rest
 }) {
   const joins = getJoins(Coll);
@@ -1076,7 +1084,6 @@ function normalizeArgs({
     joinToArgs(Coll, joinKey, { debug, fields: joinFields[joinKey] })
   );
 
-  /* If no additional joins, return args almost unchanged */
   return {
     Coll,
     selector,
@@ -1084,6 +1091,7 @@ function normalizeArgs({
     children: [...normalizedChildren, ...additionalJoinChildren],
     deps,
     debug,
+    on,
     ...rest,
   };
 }
@@ -1110,10 +1118,9 @@ function joinToArgs(Coll, joinKey, rest) {
 
   return {
     Coll: ChildColl,
-    selector: on,
+    on,
     deps: fields,
     limit: single ? 1 : limit,
     ...rest,
   };
 }
-

@@ -56,7 +56,7 @@ Stop repeating business logic all over your code base. Define hooks on collectio
   - [Hook best practices](#hook-best-practices)
 - [Nested reactive publications](#nested-reactive-publications)
   - [When to use `publish`](#when-to-use-publish)
-  - [`publish(publication, args, options)`](#publishpublication-args-options)
+  - [`publish(publication, Coll, selector, options)`](#publishpublication-coll-selector-options)
   - [Publication context (`this` in Meteor)](#publication-context-this-in-meteor)
   - [How child declarations work](#how-child-declarations-work)
   - [Ancestors chain](#ancestors-chain)
@@ -1610,11 +1610,11 @@ Use `publish()` when the publication tree is dynamic and cannot be represented a
 - selector recomputation based on changed parent fields
 - observer reuse and invalidation logic you do not want to hand-roll repeatedly
 
-## `publish(publication, args, options)`
+## `publish(publication, Coll, selector, options)`
 
 Create a reactive publication tree (Meteor-style) with support for:
 
-- explicit child observers (`{ Coll, selector, ... }`)
+- explicit child observers (`{ Coll, on, ... }`)
 - join shorthand children (`{ join: "joinKey", ... }`)
 - implicit join children derived from parent requested join fields
 
@@ -1624,7 +1624,7 @@ Create a reactive publication tree (Meteor-style) with support for:
 - `getName` to emit DDP collection names
 - `stringify` to build stable query reuse keys
 
-As with normal joins, children selectors can be:
+As with normal joins, child `on` values can be:
 
 - static selector objects
 - functions `(parent, ...ancestors) => selector`
@@ -1657,57 +1657,60 @@ join(Comments, {
 });
 
 Meteor.publish("posts.tree", function postsTree() {
-  return publish(this, {
-    Coll: Posts,
-    selector: { status: "published" },
-    fields: {
-      title: 1,
-      authorId: 1,
-      tagIds: 1,
-      editorId: 1,
-      "+": {
-        stats: 1,
-        comments: {
-          body: 1,
-          createdAt: 1,
-          "+": {
-            author: { displayName: 1 },
+  return publish(
+    this,
+    Posts,
+    { status: "published" },
+    {
+      fields: {
+        title: 1,
+        authorId: 1,
+        tagIds: 1,
+        editorId: 1,
+        "+": {
+          stats: 1,
+          comments: {
+            body: 1,
+            createdAt: 1,
+            "+": {
+              author: { displayName: 1 },
+            },
           },
         },
       },
-    },
-    children: [
-      /* Predefined join on Posts collection */
-      {
-        join: "author",
-        fields: { displayName: 1, avatarUrl: 1 },
-      },
+      children: [
+        /* Predefined join on Posts collection */
+        {
+          join: "author",
+          fields: { displayName: 1, avatarUrl: 1 },
+        },
 
-      /* Array selector */
-      {
-        Coll: Tags,
-        selector: [["tagIds"], "_id"],
-        fields: { label: 1, color: 1 },
-        deps: undefined, // Array selector children implicitely derive deps
-      },
+        /* Array selector */
+        {
+          Coll: Tags,
+          on: [["tagIds"], "_id"],
+          fields: { label: 1, color: 1 },
+          deps: undefined, // Array selector children implicitely derive deps
+        },
 
-      /* Function selector */
-      {
-        Coll: Users,
-        selector: (post) => ({ _id: post.editorId }),
-        fields: { displayName: 1 },
-        deps: ["editorId"],
-      },
+        /* Function selector */
+        {
+          Coll: Users,
+          on: (post) => ({ _id: post.editorId }),
+          fields: { displayName: 1 },
+          deps: ["editorId"],
+        },
 
-      /* Object selector. Always returns the same data irrespective of parent. */
-      {
-        Coll: FeatureFlags,
-        selector: { scope: "posts_publication" },
-        fields: { key: 1, enabled: 1 },
-        deps: false,
-      },
-    ],
-  });
+        /* Object selector. Always returns the same data irrespective of parent. */
+        {
+          Coll: FeatureFlags,
+          on: { scope: "posts_publication" },
+          fields: { key: 1, enabled: 1 },
+          deps: false,
+        },
+      ],
+    }
+  );
 });
 ```
 
@@ -1736,9 +1739,15 @@ Example:
 
 ```js
 Meteor.publish("posts.tree", function postsTree() {
-  return publish(this, args, {
-    maxConcurrent: 5,
-  });
+  return publish(
+    this,
+    Posts,
+    { status: "published" },
+    {
+      ...args,
+      maxConcurrent: 5,
+    }
+  );
 });
 ```
 
@@ -1762,10 +1771,7 @@ Example:
 ```js
 Meteor.publish("posts.tree", function () {
   // `this` is the publication context/session.
-  return publish(this, {
-    Coll: Posts,
-    selector: { status: "published" },
-  });
+  return publish(this, Posts, { status: "published" });
 });
 ```
 
@@ -1776,7 +1782,7 @@ If `ready` is missing, `publish()` throws.
 `children` entries must be objects and can be defined with either:
 
 - explicit child args:
-  - `{ Coll, selector, fields?, deps?, children?, ...cursorOptions }`
+  - `{ Coll, on, fields?, deps?, children?, ...cursorOptions }`
 - join shorthand:
   - `{ join: "joinKey", ...overrides }`
 
@@ -1797,31 +1803,34 @@ This is useful when deep children must depend on context from higher levels.
 
 ```js
 Meteor.publish("resources.tasks.actions", function () {
-  return publish(this, {
-    Coll: Resources,
-    selector: { archived: false },
-    children: [
-      {
-        Coll: Tasks,
-        selector: (resource) => ({ resourceId: resource._id }),
-        deps: ["_id"],
-        children: [
-          {
-            Coll: Actions,
-            selector: (task, resource) => ({
-              taskId: task._id,
-              tenantId: resource.tenantId,
-            }),
-            deps(changedFields, task, resource) {
-              // Re-run when task link changes or resource tenancy changes.
-              if ("tenantId" in changedFields) return true;
-              return ["_id", "tenantId"];
+  return publish(
+    this,
+    Resources,
+    { archived: false },
+    {
+      children: [
+        {
+          Coll: Tasks,
+          on: (resource) => ({ resourceId: resource._id }),
+          deps: ["_id"],
+          children: [
+            {
+              Coll: Actions,
+              on: (task, resource) => ({
+                taskId: task._id,
+                tenantId: resource.tenantId,
+              }),
+              deps(changedFields, task, resource) {
+                // Re-run when task link changes or resource tenancy changes.
+                if ("tenantId" in changedFields) return true;
+                return ["_id", "tenantId"];
+              },
             },
-          },
-        ],
-      },
-    ],
-  });
+          ],
+        },
+      ],
+    }
+  );
 });
 ```
 
