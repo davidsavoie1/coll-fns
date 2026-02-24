@@ -9,6 +9,10 @@ import EJSON from "ejson";
  *   Count documents matching selector.
  * @property {(Coll:any, selector?:Object, options?:Object) => Array|Promise<Array>} findList
  *   Return an array of documents for selector/options.
+ * @property {(Coll:any, selector?:Object, callbacks?:Object, options?:Object) => {stop:Function}|Promise<{stop:Function}>} observe
+ *   Observe matching documents and call change callbacks. Must return a handle with `stop()`.
+ * @property {(value:any) => string} stringify
+ *   Stable stringifier used for internal query keys (defaults to EJSON canonical stringify).
  * @property {(Coll:any) => ((doc:any)=>any)|undefined} getTransform
  *   Optional per-collection transform applied to each fetched document.
  * @property {(fn:Function) => Function} [bindEnvironment]

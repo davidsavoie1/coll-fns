@@ -26,6 +26,17 @@ export interface Protocol<TColl = any, TDoc = AnyObject> {
     selector?: AnyObject,
     options?: AnyObject
   ) => MaybePromise<TDoc[]>;
+  observe: (
+    Coll: TColl,
+    selector?: AnyObject,
+    callbacks?: {
+      added?: (id: any, fields: AnyObject) => any;
+      changed?: (id: any, fields: AnyObject) => any;
+      removed?: (id: any) => any;
+    },
+    options?: AnyObject
+  ) => MaybePromise<{ stop: () => void }>;
+  stringify: (value: any) => string;
   getName?: (Coll: TColl) => string;
   getTransform?: (Coll: TColl) => ((doc: TDoc) => any) | undefined;
   bindEnvironment?: <TArgs extends any[], TRet>(
@@ -134,6 +145,60 @@ export interface SoftRemoveOptions {
   detailed?: boolean;
 }
 
+export type PublishJoinSelector = [string | [string], string | [string], AnyObject?];
+
+export type PublishSelector<TParent = AnyObject> =
+  | AnyObject
+  | ((parent?: TParent, ...ancestors: AnyObject[]) => MaybePromise<AnyObject>)
+  | PublishJoinSelector;
+
+export type PublishDeps<TParent = AnyObject> =
+  | boolean
+  | string
+  | string[]
+  | Set<string>
+  | AnyObject
+  | ((
+      fields: AnyObject,
+      parent?: TParent,
+      ...ancestors: AnyObject[]
+    ) => MaybePromise<
+      boolean | string | string[] | Set<string> | AnyObject | undefined
+    >)
+  | undefined;
+
+export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
+  Coll?: any;
+  join?: string;
+  selector?: PublishSelector<TParent>;
+  fields?: FieldSpec;
+  children?: PublishChildArgs<TParent>[];
+  deps?: PublishDeps<TParent>;
+  debug?: boolean | Record<string, boolean>;
+}
+
+export interface PublishArgs<TParent = AnyObject> extends AnyObject {
+  Coll: any;
+  selector: PublishSelector<TParent>;
+  fields?: FieldSpec;
+  children?: PublishChildArgs<TParent>[];
+  deps?: PublishDeps<TParent>;
+  debug?: boolean | Record<string, boolean>;
+}
+
+export interface PublicationContext {
+  added?: (collectionName: string, id: any, fields: AnyObject) => void;
+  changed?: (collectionName: string, id: any, fields: AnyObject) => void;
+  removed?: (collectionName: string, id: any) => void;
+  ready: () => void;
+  error?: (error: unknown) => void;
+  onStop?: (fn: () => void) => void;
+}
+
+export interface PublishOptions {
+  maxConcurrent?: number;
+}
+
 export function count<TColl>(
   Coll: TColl,
   selector: AnyObject,
@@ -190,6 +255,12 @@ export function remove<TColl>(
 ): MaybePromise<number>;
 
 export function configurePool(config?: PoolConfig): void;
+
+export function publish(
+  publication: PublicationContext,
+  args?: PublishArgs,
+  options?: PublishOptions
+): MaybePromise<{ stop: () => void }>;
 
 export function setProtocol<TColl = any, TDoc = AnyObject>(
   methods?: Partial<Protocol<TColl, TDoc>>

@@ -26,6 +26,76 @@ const DEBUG = {
   UNSUBSCRIBED: "UNSUBSCRIBED",
 };
 
+/**
+ * Publication context compatible with Meteor publish handlers.
+ * @typedef {Object} PublicationContext
+ * @property {(coll:string, id:any, fields:Object) => void} [added]
+ * @property {(coll:string, id:any, fields:Object) => void} [changed]
+ * @property {(coll:string, id:any) => void} [removed]
+ * @property {() => void} ready
+ * @property {(error:unknown) => void} [error]
+ * @property {(stopFn:Function) => void} [onStop]
+ */
+
+/**
+ * Child selector supported by publish children:
+ * - static selector object
+ * - selector function receiving ancestors
+ * - join-array selector [from, to, toSelector?]
+ * @typedef {Object|Function|Array} PublishSelector
+ */
+
+/**
+ * Child observer dependencies used to decide invalidation on parent change.
+ * Key matching is flat (exact key in changed fields), not deep path traversal.
+ * Object deps are supported and converted to a list of top-level truthy keys.
+ * @typedef {boolean|string|string[]|Set<string>|Object|Function|undefined} PublishDeps
+ */
+
+/**
+ * Child publication args for nested observers.
+ * May be explicit (`Coll` + `selector`) or join shorthand (`join` key).
+ * @typedef {Object} PublishChildArgs
+ * @property {*} [Coll]
+ * @property {string} [join]
+ * @property {PublishSelector} [selector]
+ * @property {Object} [fields]
+ * @property {PublishDeps} [deps]
+ * @property {PublishChildArgs[]} [children]
+ * @property {boolean|Object} [debug]
+ */
+
+/**
+ * Root publish args.
+ * @typedef {Object} PublishArgs
+ * @property {*} Coll
+ * @property {PublishSelector} selector
+ * @property {Object} [fields]
+ * @property {PublishChildArgs[]} [children]
+ * @property {PublishDeps} [deps]
+ * @property {boolean|Object} [debug]
+ */
+
+/**
+ * Extra publish runtime options.
+ * @typedef {Object} PublishOptions
+ * @property {number} [maxConcurrent=10] Maximum concurrent child observer creations.
+ */
+
+/**
+ * Create a reactive publication tree using protocol observation + nested children.
+ *
+ * `children` can be declared in two ways:
+ * - explicit child args (`{ Coll, selector, ... }`)
+ * - join shorthand (`{ join: "joinKey", ... }`) resolved from `join()` definitions
+ *
+ * Join children can also be derived implicitly from parent `fields`.
+ *
+ * @param {PublicationContext} publication Publication callbacks context.
+ * @param {PublishArgs} [args={}] Root publication arguments.
+ * @param {PublishOptions} [options={}] Internal scheduling options.
+ * @returns {Promise<{stop: Function}>} Handle with a `stop` method.
+ */
 export async function publish(
   publication, // { added, changed, removed, ready, error, onStop }.
   args = {}, // Publication arguments
@@ -48,6 +118,15 @@ export async function publish(
   }
 }
 
+/**
+ * Internal publication runner.
+ * Creates/reuses observers, manages nested subscriptions, and handles cleanup.
+ *
+ * @param {PublicationContext} publication
+ * @param {PublishArgs} [args={}]
+ * @param {PublishOptions} [options={}]
+ * @returns {Promise<{stop: Function}>}
+ */
 async function runPublication(publication, args = {}, options = {}) {
   const log = createDebugLog(args.debug);
 
@@ -659,6 +738,7 @@ function createQueryKey(Coll, selector = {}, options = {}) {
   );
 }
 
+/* Build query-key index for child args after resolving selectors from ancestors. */
 async function deriveArgsByQueryKey(ancestors, children) {
   if (!children?.length) return new Map();
 
@@ -680,7 +760,7 @@ async function deriveArgsByQueryKey(ancestors, children) {
   return new Map(entries);
 }
 
-/* Selector that will always return nothing, since _id is always mandatory */
+/* Selector that always matches no document (_id is always required). */
 const VOID_SELECTOR = { _id: { $exists: false } };
 
 /* Take all children publications arguments and derive
@@ -788,7 +868,10 @@ function deriveArgsDeps({ deps, selector }) {
  * - true = always invalidate
  * - false = never invalidate
  * - [] = List of keys the changed `fields` must include to invalidate
- * - Function (fields, ...ancestors) => normalized deps */
+ * - Object = list of top-level truthy keys
+ * - Function (fields, ...ancestors) => normalized deps
+ *
+ * Note: key matching is flat and exact against changed fields keys. */
 function normalizeDeps(deps) {
   /* `undefined` deps is a special case where user didn't specify anything. */
   if (deps === undefined) return undefined;
@@ -806,13 +889,23 @@ function normalizeDeps(deps) {
 
   /* Returns an array */
   if (isArr(deps)) return deps;
+
+  /* Keep only truthy value keys of an object */
+  if (isObj(deps)) {
+    return Object.entries(deps)
+      .filter(([, v]) => v)
+      .map(([k]) => k);
+  }
+
   if (deps instanceof Set) return [...deps];
+
   if (typeof deps === "string") return [deps];
 
   /* Any other scenario is considered as no invalidation. */
   return false;
 }
 
+/* Resolve supported selector inputs (object, function, join-array) into an object selector. */
 async function interpretSelector(selector, ancestors = []) {
   if (!selector) return VOID_SELECTOR;
 

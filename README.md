@@ -13,6 +13,7 @@ Stop repeating business logic all over your code base. Define hooks on collectio
 - [Rationale](#rationale)
 - [Installation and configuration](#installation-and-configuration)
   - [`setProtocol(protocol)`](#setprotocolprotocol)
+    - [Execution context (`bindEnvironment`)](#execution-context-bindenvironment)
   - [Bypassing `coll-fns`](#bypassing-coll-fns)
 - [Joins and fetch](#joins-and-fetch)
   - [Quick start examples](#quick-start-examples)
@@ -53,6 +54,17 @@ Stop repeating business logic all over your code base. Define hooks on collectio
     - [Default behavior](#default-behavior)
     - [Options](#options)
   - [Hook best practices](#hook-best-practices)
+- [Nested reactive publications](#nested-reactive-publications)
+  - [When to use `publish`](#when-to-use-publish)
+  - [`publish(publication, args, options)`](#publishpublication-args-options)
+  - [Publication context (`this` in Meteor)](#publication-context-this-in-meteor)
+  - [How child declarations work](#how-child-declarations-work)
+  - [Ancestors chain](#ancestors-chain)
+  - [How `deps` works](#how-deps-works)
+  - [Debugging](#debugging)
+  - [Built-in optimizations](#built-in-optimizations)
+  - [Using `publish` outside Meteor](#using-publish-outside-meteor)
+  - [Current limitations](#current-limitations)
 - [License](#license)
 
 # Rationale
@@ -220,9 +232,18 @@ const customProtocol = {
    * and return the inserted _id. */
   insert(/* Coll, doc, options */) {},
 
+  /* Observe document changes.
+   * Must return a handle with a `stop()` method. */
+  observe(/* Coll, selector = {}, callbacks = {}, options = {} */) {},
+
   /* Remove documents in a collection
    * and return the number of removed documents. */
   remove(/* Coll, selector, options */) {},
+
+  /* Stable stringify function used for internal query keys.
+   * EJSON canonical stringify is used as a good default,
+   * but can be overridden. */
+  stringify(/* value */) {},
 
   /* Update documents in a collection
    * and return the number of modified documents. */
@@ -231,6 +252,33 @@ const customProtocol = {
 
 setProtocol(customProtocol);
 ```
+
+`observe` expected shape:
+
+```js
+observe(Coll, selector = {}, callbacks = {}, options = {}) {
+  const { added, changed, removed } = callbacks;
+
+  // Your implementation subscribes reactively to selector/options changes.
+  // Callbacks should be invoked with:
+  // - added(id, fields)
+  // - changed(id, fields)
+  // - removed(id)
+  //
+  // Then return an object exposing a stop() method.
+  return {
+    stop() {
+      // Tear down underlying observer/resources.
+    },
+  };
+}
+```
+
+Notes:
+
+- `observe` can be sync or async (returning a Promise of the stop-handle).
+- `fields` should contain changed/added fields payload expected by your transport.
+- `publish()` relies on this contract to keep nested observers in sync.
 
 If your runtime has special callback context requirements, implement `bindEnvironment`.
 
@@ -247,6 +295,11 @@ const customProtocol = {
 ```
 
 If your runtime has no such requirement, simply omit `bindEnvironment`.
+
+If you want to use the [`publish()`](#publishpublication-args-options) composite publication helper:
+
+- `observe` must be defined on the protocol.
+- `stringify` can be defined if the default EJSON implementation is not sufficient.
 
 </details>
 
@@ -1520,6 +1573,321 @@ hook(Users, {
 ```
 
 </details>
+
+# Nested reactive publications
+
+If `coll-fns` is used in a Meteor project, using publications is a way to create fully reactive applications. `publish` function helps to publish complex hierarchical data.
+
+## When to use `publish`
+
+Use `publish()` when the publication tree is dynamic and cannot be represented as a simple static list of cursors.
+
+**Important caveat (Meteor):** if a publication can return plain cursor(s) directly from `Meteor.publish`, prefer that approach. Native cursor-return publications are simpler and usually more optimized by Meteor internals than any userland helper.
+
+`publish()` is intended for cases where you need one or more of:
+
+- nested reactive children depending on parent documents
+- selector recomputation based on changed parent fields
+- observer reuse and invalidation logic you do not want to hand-roll repeatedly
+
+## `publish(publication, args, options)`
+
+Create a reactive publication tree (Meteor-style) with support for:
+
+- explicit child observers (`{ Coll, selector, ... }`)
+- join shorthand children (`{ join: "joinKey", ... }`)
+- implicit join children derived from parent requested join fields
+
+`publish` internally uses protocol methods:
+
+- `observe` to track cursor changes
+- `getName` to emit DDP collection names
+- `stringify` to build stable query reuse keys
+
+As with normal joins, children selectors can be:
+
+- static selector objects
+- functions `(parent, ...ancestors) => selector`
+- join-array selectors: `[from, to, toSelector?]`
+
+Refer to the [`join()`](#joincoll-joindefinitions) section for more details.
+
+```js
+import { Meteor } from "meteor/meteor";
+import { join, publish, setJoinPrefix } from "coll-fns";
+import {
+  Posts,
+  Users,
+  Comments,
+  Tags,
+  FeatureFlags,
+  PostStats,
+} from "/imports/api/collections";
+
+setJoinPrefix("+");
+
+join(Posts, {
+  author: { Coll: Users, on: ["authorId", "_id"], single: true },
+  comments: { Coll: Comments, on: ["_id", "postId"], sort: { createdAt: -1 } },
+  stats: { Coll: PostStats, on: ["_id", "postId"], single: true },
+});
+
+join(Comments, {
+  author: { Coll: Users, on: ["authorId", "_id"], single: true },
+});
+
+Meteor.publish("posts.tree", function postsTree() {
+  return publish(this, {
+    Coll: Posts,
+    selector: { status: "published" },
+    fields: {
+      title: 1,
+      authorId: 1,
+      tagIds: 1,
+      editorId: 1,
+      "+": {
+        stats: 1,
+        comments: {
+          body: 1,
+          createdAt: 1,
+          "+": {
+            author: { displayName: 1 },
+          },
+        },
+      },
+    },
+    children: [
+      /* Predefined join on Posts collection */
+      {
+        join: "author",
+        fields: { displayName: 1, avatarUrl: 1 },
+      },
+
+      /* Array selector */
+      {
+        Coll: Tags,
+        selector: [["tagIds"], "_id"],
+        fields: { label: 1, color: 1 },
+        deps: undefined, // Array selector children implicitely derive deps
+      },
+
+      /* Function selector */
+      {
+        Coll: Users,
+        selector: (post) => ({ _id: post.editorId }),
+        fields: { displayName: 1 },
+        deps: ["editorId"],
+      },
+
+      /* Object selector. Always returns the same data irrespective of parent. */
+      {
+        Coll: FeatureFlags,
+        selector: { scope: "posts_publication" },
+        fields: { key: 1, enabled: 1 },
+        deps: false,
+      },
+    ],
+  });
+});
+```
+
+`options.maxConcurrent` controls how many child observer creations can run at
+the same time (`10` by default).
+
+Why it matters:
+
+- each parent `added`/`changed` can trigger many child observer creations
+- unbounded concurrency can create CPU spikes and DB pressure
+- too little concurrency can slow initial publication warm-up
+
+What it controls exactly:
+
+- only child observer creation tasks are throttled
+- observer reuse still applies (duplicate query keys are collapsed)
+- invalidation logic still runs; the option just smooths creation bursts
+
+Practical guidance:
+
+- decrease it if your publication causes heavy DB load or event-loop stalls
+- increase it if your DB/runtime handles parallelism well and warm-up is slow
+- keep in mind this is per `publish()` call, not a single global cap
+
+Example:
+
+```js
+Meteor.publish("posts.tree", function postsTree() {
+  return publish(this, args, {
+    maxConcurrent: 5,
+  });
+});
+```
+
+## Publication context (`this` in Meteor)
+
+`publish()` is designed first for Meteor publications. In Meteor usage, the first
+argument should be the publication session/context (`this`) received in
+`Meteor.publish(name, function () { ... })`.
+
+Minimal expected shape of `publication`:
+
+- `ready()` (required)
+- `added(collectionName, id, fields)` (optional but normally provided by Meteor)
+- `changed(collectionName, id, fields)` (optional but normally provided by Meteor)
+- `removed(collectionName, id)` (optional but normally provided by Meteor)
+- `onStop(fn)` (optional, used for cleanup registration)
+- `error(err)` (optional, used as error sink)
+
+Example:
+
+```js
+Meteor.publish("posts.tree", function () {
+  // `this` is the publication context/session.
+  return publish(this, {
+    Coll: Posts,
+    selector: { status: "published" },
+  });
+});
+```
+
+If `ready` is missing, `publish()` throws.
+
+## How child declarations work
+
+`children` entries must be objects and can be defined with either:
+
+- explicit child args:
+  - `{ Coll, selector, fields?, deps?, children?, ...cursorOptions }`
+- join shorthand:
+  - `{ join: "joinKey", ...overrides }`
+
+Additionally, join children can be derived implicitly from requested parent join fields.
+
+Conflict rule:
+
+- If the same join key is declared both as explicit child (`{ join: "..." }`) and in parent join fields (`fields["+"][joinKey]` or root join key without prefix), `publish()` throws and asks you to choose one style.
+
+## Ancestors chain
+
+For function selectors and function deps, the helper passes:
+
+- first argument: direct parent document
+- remaining arguments: full ancestors chain (grandparent, great-grandparent, ...)
+
+This is useful when deep children must depend on context from higher levels.
+
+```js
+Meteor.publish("resources.tasks.actions", function () {
+  return publish(this, {
+    Coll: Resources,
+    selector: { archived: false },
+    children: [
+      {
+        Coll: Tasks,
+        selector: (resource) => ({ resourceId: resource._id }),
+        deps: ["_id"],
+        children: [
+          {
+            Coll: Actions,
+            selector: (task, resource) => ({
+              taskId: task._id,
+              tenantId: resource.tenantId,
+            }),
+            deps(changedFields, task, resource) {
+              // Re-run when task link changes or resource tenancy changes.
+              if ("tenantId" in changedFields) return true;
+              return ["_id", "tenantId"];
+            },
+          },
+        ],
+      },
+    ],
+  });
+});
+```
+
+## How `deps` works
+
+`deps` controls when child observers are invalidated and recomputed after parent `changed` events.
+
+Supported values:
+
+- `true`: always invalidate
+- `false`: never invalidate
+- `"field"` or `["fieldA", "fieldB"]`: invalidate only when those keys are present in changed fields
+- `{ fieldA: 1, fieldB: true }`: object shorthand converted to watched keys (truthy top-level keys only)
+- function `(changedFields, parent, ...ancestors) => depsLike`: dynamic rule
+- `undefined`: special behavior
+
+Special behavior when `deps` is `undefined`:
+
+- static selector object child: treated as no invalidation (`[]`)
+- array/function selector child: treated as potentially dependent and will always invalidate conservatively
+
+For array selectors, implicit deps are auto-derived from the `from` key.
+
+`deps` matching is flat:
+
+- matching is done against exact keys present in `changedFields`
+- no deep path traversal is performed by `publish()`
+- nested object deps only contribute top-level keys
+
+## Debugging
+
+`publish()` supports lightweight lifecycle debugging with:
+
+- `debug: true` to log all internal debug events
+- `debug: { EVENT_NAME: true, ... }` to log selected events only
+
+Examples of event names include:
+
+- `CREATING`, `CREATED`, `REUSED`
+- `INVALIDATED`
+- `DOC_ADDED`, `DOC_CHANGED`, `DOC_REMOVED`
+- `CANCELLED`, `UNSUBSCRIBED`, `STOPPED`, `READY`
+
+Debug scope:
+
+- Root `debug` applies to the root observer.
+- Explicit children can override with their own `debug`.
+- Join-shorthand children (`{ join: "x", ... }`) can also provide `debug`.
+- Implicit join-derived children (from parent `fields`) inherit parent `debug`.
+
+## Built-in optimizations
+
+`publish()` includes non-trivial runtime optimizations to avoid naive observer explosions:
+
+- query-key based observer reuse across subscribers
+- placeholder promises during observer creation to collapse concurrent duplicates
+- per-document subscriber registry to attach/detach child observers safely
+- token-based race protection so stale async child creations are dropped
+- incremental invalidation:
+  - recompute only affected child query keys
+  - create only missing observers
+  - unsubscribe only obsolete observers
+- deduplicated DDP removals through reference counting of published docs
+- bounded concurrent child observer creation via internal pool (`maxConcurrent`)
+- fast bypass when selector resolves to a void selector
+
+## Using `publish` outside Meteor
+
+The helper can be used outside Meteor only if both layers are provided:
+
+- protocol layer (`setProtocol`) supporting at least:
+  - `observe`
+  - `getName` (optional, default implementation provided)
+  - `stringify` (optional, default implementation provided)
+- publication transport/context object implementing the callbacks [listed above](#publication-context-this-in-meteor)
+  (`added/changed/removed/ready/onStop/error`)
+
+Protocol methods handle database reactivity.
+`publication` handles how data changes are emitted to subscribers.
+
+## Current limitations
+
+- `publish()` is a helper, not a replacement for simple cursor-return publications.
+- Deep/dynamic trees can still be expensive if selectors are broad and highly volatile.
+- If `deps` are too broad (or omitted for dynamic selectors), invalidations may be frequent.
+- For best results, keep parent selectors selective and declare precise `deps`.
 
 # License
 
