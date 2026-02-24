@@ -1,4 +1,4 @@
-# NEXT
+# 1.5.0 - 2026-02-24
 
 - Add `publish` nested publication helper;
 - Add `observe` and `stringify` to protocol and Meteor implementations;
