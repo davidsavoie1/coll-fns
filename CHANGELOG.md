@@ -1,3 +1,10 @@
+# NEXT
+
+- Add `publish` nested publication helper;
+- Add `observe` and `stringify` to protocol and Meteor implementations;
+
+---
+
 # 1.4.3 - 2026-02-20
 
 - Fix | Preserve Meteor Fiber context in hooks with `protocol.bindEnvironment` support;
