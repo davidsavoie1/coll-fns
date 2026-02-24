@@ -1843,7 +1843,7 @@ Examples of event names include:
 - `CREATING`, `CREATED`, `REUSED`
 - `INVALIDATED`
 - `DOC_ADDED`, `DOC_CHANGED`, `DOC_REMOVED`
-- `CANCELLED`, `UNSUBSCRIBED`, `STOPPED`, `READY`
+- `CANCELLED`, `UNFOLLOWED`, `STOPPED`, `READY`
 
 Debug scope:
 
@@ -1854,19 +1854,25 @@ Debug scope:
 
 ## Built-in optimizations
 
-`publish()` includes non-trivial runtime optimizations to avoid naive observer explosions:
+`publish()` is designed to stay controlled even with nested reactive trees.
 
-- query-key based observer reuse across subscribers
-- placeholder promises during observer creation to collapse concurrent duplicates
-- per-document subscriber registry to attach/detach child observers safely
-- token-based race protection so stale async child creations are dropped
-- incremental invalidation:
-  - recompute only affected child query keys
-  - create only missing observers
-  - unsubscribe only obsolete observers
-- deduplicated DDP removals through reference counting of published docs
-- bounded concurrent child observer creation via internal pool (`maxConcurrent`)
-- fast bypass when selector resolves to a void selector
+In practical terms, it aims to protect you from:
+
+- creating the same observer repeatedly for equivalent child queries
+- runaway bursts of child observer creation
+- stale async creations being attached after data already changed
+- leaked child observers when parent links disappear
+- duplicate add/remove churn for documents shared by multiple branches
+
+Why this matters:
+
+- lower risk of memory growth from forgotten/stale observers
+- fewer unnecessary observers and DB watches
+- more predictable behavior during frequent parent changes
+- safer use of nested publications in real apps, not only toy examples
+
+`maxConcurrent` is part of this safety model: it prevents uncontrolled parallel
+creation bursts and lets you tune throughput vs load.
 
 ## Using `publish` outside Meteor
 
@@ -1880,7 +1886,7 @@ The helper can be used outside Meteor only if both layers are provided:
   (`added/changed/removed/ready/onStop/error`)
 
 Protocol methods handle database reactivity.
-`publication` handles how data changes are emitted to subscribers.
+`publication` handles how data changes are emitted to clients.
 
 ## Current limitations
 

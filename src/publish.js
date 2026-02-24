@@ -23,7 +23,7 @@ const DEBUG = {
   READY: "READY",
   REUSED: "REUSED",
   STOPPED: "STOPPED",
-  UNSUBSCRIBED: "UNSUBSCRIBED",
+  UNFOLLOWED: "UNFOLLOWED",
 };
 
 /**
@@ -137,7 +137,7 @@ async function runPublication(publication, args = {}, options = {}) {
    * Create registries inside publication to create closures. */
 
   /* Map of `observerId.docId` => Set(...observers) */
-  const observersBySubscribers = createRegistry();
+  const observersByFollowers = createRegistry();
 
   /* Map of observer by key representing the maybe reusable query */
   const observersByQuery = createRegistry();
@@ -185,8 +185,8 @@ async function runPublication(publication, args = {}, options = {}) {
     /* Create a unique id for the observer */
     const observerId = nanoid();
 
-    /* Create a unique subscriber key from the observer's id and the doc id */
-    const createSubscriberKey = (docId) =>
+    /* Create a unique follower key from the observer's id and the doc id */
+    const createFollowerKey = (docId) =>
       [observerId, coll, docId].join(KEY_SEPARATOR);
 
     const protocol = getProtocol();
@@ -228,8 +228,8 @@ async function runPublication(publication, args = {}, options = {}) {
     /* Observer's list of `collname|docId` docs added through DDP. */
     const docsList = new Set();
 
-    /* Map of token by subscriberKey to ensure only latest operation succeeds */
-    const tokenBySubscriber = createTokensRegistry();
+    /* Map of token by followerKey to ensure only latest operation succeeds */
+    const tokenByFollower = createTokensRegistry();
 
     let resolveCreation, rejectCreation;
     const creationPromise = new Promise((resolve, reject) => {
@@ -245,7 +245,7 @@ async function runPublication(publication, args = {}, options = {}) {
 
     async function registerChildObserver(
       childArgs,
-      subscriberKey,
+      followerKey,
       token,
       ancestors
     ) {
@@ -253,7 +253,7 @@ async function runPublication(publication, args = {}, options = {}) {
       if (cancelled || publicationStopped) return;
 
       /* Prevent registering child if its token has been replaced or removed */
-      if (!tokenBySubscriber.check(subscriberKey, token)) return;
+      if (!tokenByFollower.check(followerKey, token)) return;
 
       const subObserver = await createOrReuseObserver(childArgs, { ancestors });
 
@@ -263,38 +263,38 @@ async function runPublication(publication, args = {}, options = {}) {
       if (
         cancelled ||
         publicationStopped ||
-        !tokenBySubscriber.check(subscriberKey, token)
+        !tokenByFollower.check(followerKey, token)
       ) {
-        subObserver.unsubscribeMaybeCancel(subscriberKey);
+        subObserver.unfollowMaybeCancel(followerKey);
         return;
       }
 
-      /* Register the subObserver in the observer's subscribers list
-       * and in the `observersBySubscribers` registry */
-      addSubscriber(subscriberKey, subObserver);
+      /* Register the subObserver in the observer's followers list
+       * and in the `observersByFollowers` registry */
+      addFollower(followerKey, subObserver);
 
       /* Save the subObserver in the current observer's subObservers list */
       subObservers.add(subObserver);
     }
 
-    /* Unsubscribe a `subObserver` from a specific `subscriberKey` */
-    function unsubscribeSubObserver(subscriberKey, subObserver) {
-      /* Unsubscribe the subObserver for this subscriber */
-      subObserver.unsubscribeMaybeCancel(subscriberKey);
+    /* Unfollow a `subObserver` from a specific `followerKey` */
+    function unfollowSubObserver(followerKey, subObserver) {
+      /* Unfollow the subObserver for this follower link */
+      subObserver.unfollowMaybeCancel(followerKey);
 
       /* Remove from the current observer's `subObservers` list */
       subObservers.delete(subObserver);
 
-      /* Remove from the global subscribers' observers registry */
-      observersBySubscribers.pull(subscriberKey, subObserver);
+      /* Remove from the global followers' observers registry */
+      observersByFollowers.pull(followerKey, subObserver);
 
       /* subObserver can still be active for another observer
        * using the same query key, so keep it in query observers register. */
     }
 
-    /* Return a Map of `queryKey => observer` for a specific `subscriberKey` */
-    async function getObserversByQueryKey(subscriberKey) {
-      const observersSet = observersBySubscribers.get(subscriberKey);
+    /* Return a Map of `queryKey => observer` for a specific `followerKey` */
+    async function getObserversByQueryKey(followerKey) {
+      const observersSet = observersByFollowers.get(followerKey);
       if (!observersSet) return new Map();
 
       /* Await the observer's list, since some might still be pointing to a placeholder promise */
@@ -303,8 +303,8 @@ async function runPublication(publication, args = {}, options = {}) {
       return new Map(observers.map((obs) => [obs.queryKey, obs]));
     }
 
-    function isOwnSubscriberKey(subscriberKey) {
-      const [keyObserverId] = subscriberKey.split(KEY_SEPARATOR);
+    function isOwnFollowerKey(followerKey) {
+      const [keyObserverId] = followerKey.split(KEY_SEPARATOR);
       return keyObserverId === observerId;
     }
 
@@ -374,11 +374,11 @@ async function runPublication(publication, args = {}, options = {}) {
 
           /* Key representing a specific document for a specific observer.
            * Used to save all observers linked to this document for further retrieval. */
-          const subscriberKey = createSubscriberKey(_id);
+          const followerKey = createFollowerKey(_id);
 
           /* Generate a token to save in the registry and that
            * must still be the same when registering child observer. */
-          const token = tokenBySubscriber.register(subscriberKey);
+          const token = tokenByFollower.register(followerKey);
 
           /* Add the added document to the ancestors list */
           const doc = { ...fields, _id };
@@ -390,7 +390,7 @@ async function runPublication(publication, args = {}, options = {}) {
             pool.add(
               registerChildObserver,
               childArgs,
-              subscriberKey,
+              followerKey,
               token,
               newAncestors
             )
@@ -428,11 +428,11 @@ async function runPublication(publication, args = {}, options = {}) {
           if (!invalidated) return;
           log(DEBUG.INVALIDATED, debugKey);
 
-          /* Recreate the subscriber key that was used when doc was added. */
-          const subscriberKey = createSubscriberKey(_id);
+          /* Recreate the follower key that was used when doc was added. */
+          const followerKey = createFollowerKey(_id);
 
           const currObserversByQueryKey =
-            await getObserversByQueryKey(subscriberKey);
+            await getObserversByQueryKey(followerKey);
 
           /* Recompute the children query keys from new version of doc */
           const newArgsByQueryKey = await deriveArgsByQueryKey(
@@ -449,24 +449,24 @@ async function runPublication(publication, args = {}, options = {}) {
           );
 
           if (missingEntries.length) {
-            const token = tokenBySubscriber.register(subscriberKey);
+            const token = tokenByFollower.register(followerKey);
 
             /* Create child observers that are missing from current ones */
             missingEntries.forEach((args) => {
               pool.add(
                 registerChildObserver,
                 args,
-                subscriberKey,
+                followerKey,
                 token,
                 newAncestors
               );
             });
           }
 
-          /* Unsubscribe current child observers no longer needed */
+          /* Unfollow current child observers no longer needed */
           currObserversByQueryKey.forEach((obs, queryKey) => {
             if (newArgsByQueryKey.has(queryKey)) return;
-            pool.add(unsubscribeSubObserver, subscriberKey, obs);
+            pool.add(unfollowSubObserver, followerKey, obs);
           });
         },
 
@@ -477,22 +477,22 @@ async function runPublication(publication, args = {}, options = {}) {
 
           decrementDocCountAndRemoveIfZero(coll, _id);
 
-          /* Unregister the document subscriber from the observers... */
+          /* Unregister the document follower link from the observers... */
 
-          /* Recreate the subscriber key that was used when doc was added. */
-          const subscriberKey = createSubscriberKey(_id);
+          /* Recreate the follower key that was used when doc was added. */
+          const followerKey = createFollowerKey(_id);
 
-          /* Invalidate previous token for this subscriber
+          /* Invalidate previous token for this follower
            * to ensure no previous child observer creation is allowed */
-          tokenBySubscriber.remove(subscriberKey);
+          tokenByFollower.remove(followerKey);
 
-          /* Retrieve the subscriber's observers from the registry */
-          const subscriberObservers =
-            observersBySubscribers.get(subscriberKey) || new Set();
+          /* Retrieve follower observers from the registry */
+          const followerObservers =
+            observersByFollowers.get(followerKey) || new Set();
 
-          /* Unsubscribe each observer linked to this doc subscriber. */
-          subscriberObservers.forEach((subObserver) =>
-            pool.add(unsubscribeSubObserver, subscriberKey, subObserver)
+          /* Unfollow each observer linked to this doc follower key. */
+          followerObservers.forEach((subObserver) =>
+            pool.add(unfollowSubObserver, followerKey, subObserver)
           );
         },
       };
@@ -529,25 +529,25 @@ async function runPublication(publication, args = {}, options = {}) {
         /* Stop current observer */
         observer.stop();
 
-        /* Unsubscribe or cancel all subObservers, then clear the list */
+        /* Unfollow or cancel all subObservers, then clear the list */
         subObservers.forEach((subObserver) =>
-          subObserver.unsubscribeMaybeCancel()
+          subObserver.unfollowMaybeCancel()
         );
         subObservers.clear();
 
         /* Retrieve all doc observers linked to the current `observerId`
-         * in the `observersBySubscribers` registry
-         * and unsubscribe them. */
-        [...observersBySubscribers.entries()].forEach(
-          ([subscriberKey, subObservers = new Set()]) => {
-            if (!isOwnSubscriberKey(subscriberKey)) return;
+         * in the `observersByFollowers` registry
+         * and unfollow them. */
+        [...observersByFollowers.entries()].forEach(
+          ([followerKey, subObservers = new Set()]) => {
+            if (!isOwnFollowerKey(followerKey)) return;
 
             subObservers.forEach((subObserver) =>
-              subObserver.unsubscribeMaybeCancel(subscriberKey)
+              subObserver.unfollowMaybeCancel(followerKey)
             );
 
-            /* Remove stale registry entry now that this subscriber was fully unsubscribed. */
-            observersBySubscribers.delete(subscriberKey);
+            /* Remove stale registry entry now that this follower key was fully removed. */
+            observersByFollowers.delete(followerKey);
           }
         );
 
@@ -561,7 +561,7 @@ async function runPublication(publication, args = {}, options = {}) {
         docsList.clear();
 
         /* Cancellation should have been triggered by a publication stop
-         * or subscriptions count dropping below one.
+         * or followers count dropping below one.
          * Since only one observer can be registered for a query key,
          * remove it from the registry when cancelled. */
         observersByQuery.delete(queryKey);
@@ -572,19 +572,19 @@ async function runPublication(publication, args = {}, options = {}) {
         log(DEBUG.CANCELLED, debugKey);
       };
 
-      /* Add an `unsubscribe` method that allows a subscriber
-       * to stop its subscription. If subscriptions count
+      /* Add an `unfollow` method that allows a follower link
+       * to stop its tracking. If followers count
        * drops below 1, also cancel the observer. */
-      observer.unsubscribeMaybeCancel = function (subscriberKey) {
-        if (observer.subscribers) {
-          observer.subscribers.delete(subscriberKey);
-          log(DEBUG.UNSUBSCRIBED, "from", debugKey, "by", subscriberKey);
+      observer.unfollowMaybeCancel = function (followerKey) {
+        if (observer.followers) {
+          observer.followers.delete(followerKey);
+          log(DEBUG.UNFOLLOWED, "from", debugKey, "by", followerKey);
         }
 
-        /* Keep global registry tidy when unsubscribing directly. */
-        observersBySubscribers.pull(subscriberKey, observer);
+        /* Keep global registry tidy when unfollowing directly. */
+        observersByFollowers.pull(followerKey, observer);
 
-        if (!observer.subscribers || observer.subscribers.size < 1) {
+        if (!observer.followers || observer.followers.size < 1) {
           observer.cancel();
         }
       };
@@ -603,20 +603,20 @@ async function runPublication(publication, args = {}, options = {}) {
     }
   }
 
-  /* Add a subscriber key to an observer's list of subscribers
-   * and push subscriber in the `observersBySubscribers` global registry. */
-  function addSubscriber(subscriberKey, observer) {
-    const subscribers = observer.subscribers;
+  /* Add a follower key to an observer's list of followers
+   * and push follower link in the `observersByFollowers` global registry. */
+  function addFollower(followerKey, observer) {
+    const followers = observer.followers;
 
-    /* Add subscriber to the subscribers list or create the missing list */
-    if (subscribers) {
-      subscribers.add(subscriberKey);
+    /* Add follower to the followers list or create the missing list */
+    if (followers) {
+      followers.add(followerKey);
     } else {
-      observer.subscribers = new Set([subscriberKey]);
+      observer.followers = new Set([followerKey]);
     }
 
-    /* Save the observer in its subscriber's list of observers */
-    observersBySubscribers.push(subscriberKey, observer);
+    /* Save the observer in its follower list of observers */
+    observersByFollowers.push(followerKey, observer);
   }
 
   /* === AFTER INTERNAL FUNCTIONS === */
@@ -639,7 +639,7 @@ async function runPublication(publication, args = {}, options = {}) {
     /* Clear the registry maps.
      * Probably redundant since registries are inside the publication closure. */
     observersByQuery.clear();
-    observersBySubscribers.clear();
+    observersByFollowers.clear();
 
     log(DEBUG.STOPPED);
   }
@@ -1006,18 +1006,18 @@ function createTokensRegistry() {
   const registry = new Map();
 
   return {
-    check(subscriberKey, token) {
-      return registry.get(subscriberKey) === token;
+    check(followerKey, token) {
+      return registry.get(followerKey) === token;
     },
 
-    register(subscriberKey) {
+    register(followerKey) {
       const token = nanoid();
-      registry.set(subscriberKey, token);
+      registry.set(followerKey, token);
       return token;
     },
 
-    remove(subscriberKey) {
-      registry.delete(subscriberKey);
+    remove(followerKey) {
+      registry.delete(followerKey);
     },
   };
 }
@@ -1116,3 +1116,4 @@ function joinToArgs(Coll, joinKey, rest) {
     ...rest,
   };
 }
+
