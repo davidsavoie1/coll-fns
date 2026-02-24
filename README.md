@@ -522,7 +522,7 @@ join(Workers, {
 
 When joins are too complex to be defined with an array or object (although rare), a function can be used as the `on` property. Each parent document will be passed to this function, which should return a selector to use on the child collection.
 
-When using function-based joins, **a `fields` property should be added** to the join definition to declare which fields the parent document needs for the join to work:
+When using function-based joins, **a `deps` property should be added** to the join definition to declare which parent fields are required for the join to work:
 
 ```js
 import { join } from "coll-fns";
@@ -545,13 +545,15 @@ join(Posts, {
       };
     },
     /* Parent fields needed in the join function */
-    fields: {
+    deps: {
       _id: 1, // Optional. _id is implicit in any fetch.
       postedAt: 1,
     },
   },
 });
 ```
+
+`fields` remains accepted as a backward-compatible alias for `deps`.
 
 ### Recursive joins
 
@@ -572,7 +574,7 @@ join(Users, {
 
 ### Join additional options
 
-Any additional properties defined on the join (other than `Coll`, `on`, `single`, `postFetch`) will be treated as options to pass to the nested documents `fetchList`. It usually includes:
+Any additional properties defined on the join (other than `Coll`, `on`, `single`, `postFetch`, `deps` and legacy `fields`) will be treated as options to pass to the nested documents `fetchList`. It usually includes:
 
 - `limit`: Maximum joined documents count
 - `skip`: Documents to skip in the fetch
@@ -582,7 +584,7 @@ Any additional properties defined on the join (other than `Coll`, `on`, `single`
 
 Children documents might need to be modified (transformed, ordered, filtered...) after being fetched. The `postFetch: (childrenDocs, parentDoc) => childrenDocs` join definition property can be used to do so.
 
-The second argument of the function is the parent document. If some of its properties are needed, they should be declared in the `fields` property to ensure they are not missing from the requested fetched fields.
+The second argument of the function is the parent document. If some of its properties are needed, they should be declared in the join `deps` property so they are guaranteed to be fetched on the parent.
 
 ```js
 import { join } from "coll-fns";
@@ -594,8 +596,8 @@ join(Resources, {
     Coll: Tasks,
     on: ["_id", "resourceId"],
 
-    /* Ensure `tasksOrder` will be fetched */
-    fields: { tasksOrder: 1 },
+    /* Ensure `tasksOrder` will be fetched on parent docs */
+    deps: { tasksOrder: 1 },
 
     /* Transform the joined tasks documents based on parent resource. */
     postFetch(tasks, resource) {

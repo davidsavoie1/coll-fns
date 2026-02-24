@@ -2,6 +2,7 @@
 
 - Add `publish` nested publication helper;
 - Add `observe` and `stringify` to protocol and Meteor implementations;
+- Prefer `deps` over `fields` in join definitions;
 
 ---
 

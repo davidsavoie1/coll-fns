@@ -58,7 +58,8 @@ let joinPrefix = null;
  * @property {JoinOn} on - Relation description (array/function/object).
  * @property {boolean} [single] - If true, attach a single document instead of an array.
  * @property {(joined: any[]|any, parent: any) => any} [postFetch] - Transform the joined value before attaching.
- * @property {Object} [fields] - Base collection fields required to perform the join when `on` is a function.
+ * @property {Object} [deps] - Parent fields required to perform the join when `on` is a function.
+ * @property {Object} [fields] - Backward-compatible alias for `deps`.
  * @property {number} [limit] - Limit for the joined fetch (applies when not single).
  * @property {any} [options] - Any extra options passed through to the underlying fetch/find implementation.
  */
@@ -69,7 +70,7 @@ let joinPrefix = null;
  *
  * Notes:
  * - Calling with `joins` falsy clears existing joins for the collection.
- * - If `on` is a function and no `fields` are declared for the join, a warning is emitted,
+ * - If `on` is a function and no `deps` are declared for the join, a warning is emitted,
  *   because required linking keys may not be fetched unless explicitly requested.
  *
  * @template TColl
@@ -97,30 +98,32 @@ export function join(Collection, joins) {
     return;
   }
 
-  Object.entries(joins).forEach(([key, { Coll, on, fields }]) => {
-    if (!Coll) {
-      throw new Error(`Collection 'Coll' for '${key}' join is required.`);
-    }
+  Object.entries(joins).forEach(
+    ([key, { Coll, on, fields, deps = fields }]) => {
+      if (!Coll) {
+        throw new Error(`Collection 'Coll' for '${key}' join is required.`);
+      }
 
-    if (!on) {
-      throw new Error(`Join '${key}' has no 'on' condition specified.`);
-    }
+      if (!on) {
+        throw new Error(`Join '${key}' has no 'on' condition specified.`);
+      }
 
-    const joinType = typeOf(on);
-    if (!KNOWN_TYPES.includes(joinType)) {
-      throw new Error(
-        `Join '${key}' has an unrecognized 'on' condition type of '${joinType}'. Should be one of '${knownTypesCaption}'.`
-      );
-    }
+      const joinType = typeOf(on);
+      if (!KNOWN_TYPES.includes(joinType)) {
+        throw new Error(
+          `Join '${key}' has an unrecognized 'on' condition type of '${joinType}'. Should be one of '${knownTypesCaption}'.`
+        );
+      }
 
-    // When on is a function, the join likely depends on keys from the parent doc.
-    // Encourage declaring the base fields required so callers don't forget them.
-    if (isFunc(on) && !fields) {
-      warn(
-        `Join '${key}' is defined with a function 'on', but no 'fields' are explicitly specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`
-      );
+      // When on is a function, the join likely depends on keys from the parent doc.
+      // Encourage declaring the base deps required so callers don't forget them.
+      if (isFunc(on) && !deps) {
+        warn(
+          `Join '${key}' is defined with a function 'on', but no 'deps' are explicitly specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`
+        );
+      }
     }
-  });
+  );
 
   // Merge new join defs with existing ones on this collection
   joinsDictionary.set(Collection, {

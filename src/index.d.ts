@@ -76,6 +76,8 @@ export interface JoinDef<TParent = AnyObject> extends AnyObject {
   on: JoinOn<TParent>;
   single?: boolean;
   postFetch?: (joined: any[] | any, parent: TParent) => any;
+  deps?: FieldSpec;
+  /** Backward-compatible alias for `deps`. */
   fields?: FieldSpec;
   limit?: number;
 }

@@ -30,6 +30,8 @@ import {
  *   - Array form: [fromProp, toProp, toSelector?]
  *   - Object form: static selector for target docs
  *   - Function form: (doc) => selector, computed per parent doc
+ * @property {Object} [deps] - Parent fields required to compute function joins.
+ * @property {Object} [fields] - Backward-compatible alias for `deps`.
  * @property {boolean} [single] - If true, attach a single doc instead of an array.
  * @property {Function} [postFetch] - (joined, parentDoc) => any. Final shaping of joined value.
  * @property {number} [limit] - Limit for joined query when single is false.

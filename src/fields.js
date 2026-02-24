@@ -99,13 +99,15 @@ export function dispatchFields(fields, joins = {}) {
     return { _: normalizeFields(ownFields, true), "+": joinFields };
   }
 
-  // Otherwise, ensure we include any fields required by the join definitions
-  // (on/from keys and/or explicit fields defined on the join).
+  // Otherwise, ensure we include any deps fields required by the join definitions
+  // (on/from keys and/or explicit fields deps defined on the join).
   const augmentedOwnFields = Object.keys(joinFields).reduce((acc, joinKey) => {
-    const { on, fields } = joins[joinKey];
+    const { on, fields: _joinFields, deps = _joinFields } = joins[joinKey];
+
     const onFields = Array.isArray(on) ? { [on[0]]: 1 } : undefined;
-    if (!(onFields || fields)) return acc;
-    return { ...acc, ...onFields, ...fields };
+    if (!(onFields || deps)) return acc;
+
+    return { ...acc, ...onFields, ...deps };
   }, ownFields);
 
   return { _: normalizeFields(augmentedOwnFields, true), "+": joinFields };
@@ -216,7 +218,7 @@ function isolateJoinFields(fields, joins = {}) {
 
     const existingJoinFields = filter(
       ([k]) => joinKeys.includes(k),
-      joinFields,
+      joinFields
     );
     return { "+": existingJoinFields, ...ownFields };
   }

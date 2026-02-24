@@ -1114,12 +1114,12 @@ function joinToArgs(Coll, joinKey, rest) {
     );
   }
 
-  const { Coll: ChildColl, on, fields, limit, single } = join;
+  const { Coll: ChildColl, on, fields, deps = fields, limit, single } = join;
 
   return {
     Coll: ChildColl,
     on,
-    deps: fields,
+    deps,
     limit: single ? 1 : limit,
     ...rest,
   };
