@@ -1,3 +1,9 @@
+# NEXT
+
+- Fix | Children observers not awaited before publication ready
+
+---
+
 # 1.5.0 - 2026-02-24
 
 - Add `publish` nested publication helper;

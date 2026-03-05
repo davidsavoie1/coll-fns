@@ -1719,6 +1719,11 @@ Meteor.publish("posts.tree", function postsTree() {
 `options.maxConcurrent` controls how many child observer creations can run at
 the same time (`10` by default).
 
+`options.waitForAll` controls readiness semantics (`true` by default):
+
+- `true`: call `ready()` only after the full initial observer tree is initialized
+- `false`: call `ready()` as soon as the root observer is initialized (children continue in background)
+
 Why it matters:
 
 - each parent `added`/`changed` can trigger many child observer creations

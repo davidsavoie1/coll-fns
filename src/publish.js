@@ -81,6 +81,8 @@ const DEBUG = {
  * Extra publish runtime options.
  * @typedef {Object} PublishOptions
  * @property {number} [maxConcurrent=10] Maximum concurrent child observer creations.
+ * @property {boolean} [waitForAll=true] If true, wait for full initial tree initialization
+ * before calling `ready()`. If false, wait only for root observer initialization.
  */
 
 /**
@@ -136,7 +138,16 @@ async function runPublication(publication, args = {}) {
   const log = createDebugLog(args.debug);
 
   /* Remove options that are relevant (or should be discarded) only on root */
-  const { maxConcurrent, on, ...rest } = args;
+  const {
+    maxConcurrent,
+    on,
+    waitForAll = true, // Should the entire tree initialization be awaited before readiness?
+    ...rest
+  } = args;
+
+  if (typeof waitForAll !== "boolean") {
+    throw new TypeError("'waitForAll' must be a boolean.");
+  }
 
   /* Publication-level stop flag to prevent late observers from leaking. */
   let publicationStopped = false;
@@ -370,6 +381,9 @@ async function runPublication(publication, args = {}) {
         return null;
       }
 
+      let initializing = true;
+      let initialPromises = [];
+
       const observeCallbacks = {
         /* When a document is added to the cursor... */
         async added(_id, fields) {
@@ -395,15 +409,24 @@ async function runPublication(publication, args = {}) {
 
           /* For each added document, create a new subObserver
            * for each child publication. */
-          validChildren.forEach((childArgs) =>
-            pool.add(
+          validChildren.forEach((childArgs) => {
+            const callAndArgs = [
               registerChildObserver,
               childArgs,
               followerKey,
               token,
-              newAncestors
-            )
-          );
+              newAncestors,
+            ];
+
+            /* If publication expects children to be initialized
+             * before declaring as ready, generate promises
+             * that will be awaited before returning created observer. */
+            if (initializing && waitForAll) {
+              initialPromises.push(pool.waitFor(...callAndArgs));
+            } else {
+              pool.add(...callAndArgs);
+            }
+          });
         },
 
         /* When a document from the cursor changes... */
@@ -512,6 +535,12 @@ async function runPublication(publication, args = {}) {
         observeCallbacks,
         options
       );
+
+      initializing = false;
+
+      if (initialPromises.length) {
+        await Promise.all(initialPromises);
+      }
 
       log(DEBUG.CREATED, debugKey);
 

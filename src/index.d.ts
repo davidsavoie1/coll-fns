@@ -187,6 +187,7 @@ export interface PublishOptions<TParent = AnyObject> extends AnyObject {
   deps?: PublishDeps<TParent>;
   debug?: boolean | Record<string, boolean>;
   maxConcurrent?: number;
+  waitForAll?: boolean;
 }
 
 export interface PublicationContext {

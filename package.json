@@ -11,6 +11,7 @@
     "dist",
     "src/index.d.ts"
   ],
+  "repository": "github:davidsavoie1/coll-fns",
   "source": "src/index.js",
   "main": "./dist/coll-fns.cjs",
   "module": "./dist/coll-fns.mjs",

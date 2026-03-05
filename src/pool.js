@@ -6,10 +6,19 @@ const SHIFT = "shift";
 const MAX_CONCURRENT = 10;
 const MAX_PENDING = 250;
 
+const DROP_CALL_REASON = "Call dropped";
+
 let poolLocked = false;
 
 let pool = createDefaultPool();
 
+/**
+ * Internal pool call unit.
+ *
+ * - `add(...)` uses `{ fn, args }` fire-and-forget calls.
+ * - `waitFor(...)` augments calls with `resolve/reject` so callers can
+ *   await execution completion or overflow/clear rejection.
+ */
 function createDefaultPool() {
   return createPool({
     maxConcurrent: MAX_CONCURRENT,
@@ -74,18 +83,25 @@ export function createPool({
       throw new Error("Max concurrent calls reached");
     }
 
+    /* Retrieve function and args.
+     * `resolve/reject` are present for `waitFor` calls only. */
+    const { fn, args = [], resolve, reject } = call;
+
     try {
       /* Add the call to the list */
       concurrents.add(call);
 
-      /* Retrieve function and args */
-      const { fn, args = [] } = call;
-
       /* Call the function with the arguments */
-      await fn(...args);
+      const res = await fn(...args);
+
+      /* Settle `waitFor` calls with function result. */
+      resolve?.(res);
     } catch (error) {
       /* If an error is thrown, handle it with provided handler */
       handleError(error, call);
+
+      /* Settle `waitFor` calls with function error. */
+      reject?.(error);
     } finally {
       /* After completion, remove call from concurrents */
       concurrents.delete(call);
@@ -118,11 +134,16 @@ export function createPool({
 
   function handleOverflow(call) {
     /* When dropping, do nothing */
-    if (onOverflow === DROP) return;
+    if (onOverflow === DROP) {
+      dropCall(call, "Last call dropped");
+      return;
+    }
 
     if (onOverflow === SHIFT) {
       /* Make space by removing first call */
-      pendings.shift();
+      const firstCall = pendings.shift();
+      dropCall(firstCall, "First call dropped");
+
       if (pendings.length < maxPending) {
         addCall(call);
       }
@@ -138,6 +159,16 @@ export function createPool({
     console.error("Invalid 'onOverflow'");
   }
 
+  /**
+   * Reject a queued call only when it comes from `waitFor`.
+   * Plain `add` calls are fire-and-forget and have no rejection channel.
+   */
+  function dropCall(call, reason = DROP_CALL_REASON) {
+    if (!call.reject) return;
+
+    call.reject(new Error(reason));
+  }
+
   /* If an overflow function is used,
    * it should return a new `pendings` list
    * that will replace the current one.
@@ -151,7 +182,11 @@ export function createPool({
     const reorderedPendings = onOverflow([...pendings], call);
 
     /* If `onOverflow` returns undefined, consider the pendings unchanged. */
-    if (reorderedPendings === undefined) return;
+    if (reorderedPendings === undefined) {
+      /* Drop the call to be added */
+      dropCall(call, "Last call dropped");
+      return;
+    }
 
     /* Ensure returned pendings is an array */
     if (!Array.isArray(reorderedPendings)) {
@@ -171,6 +206,12 @@ export function createPool({
       return [...acc, prevPending];
     }, []);
 
+    /* Drop initial pending calls that are not in the new ones anymore */
+    potentialPendings.forEach((call) => {
+      const dropped = !newPendings.some((p) => p._id === call._id);
+      if (dropped) dropCall(call, "Call selectively dropped");
+    });
+
     pendings = newPendings;
   }
 
@@ -187,9 +228,33 @@ export function createPool({
       addCall(call);
     },
 
-    /* Clear the pendings list. Active calls are not stopped. */
+    /* Clear the pendings list. Active calls are not stopped.
+     * Pending `waitFor` calls are rejected so they never hang. */
     clear() {
+      /* Drop all existing calls */
+      pendings.forEach((call) => dropCall(call, "Call cleared"));
+
+      /* Clear the pending calls list */
       pendings = [];
+    },
+
+    /* Same as `add`, but returns a promise settled when the call
+     * is executed (resolved/rejected), or rejected if dropped. */
+    waitFor(fn, ...args) {
+      return new Promise((resolve, reject) => {
+        /* Construct a call object with unique _id
+         * and a `fn` that will use `resolve` and `reject`
+         * to compete the promise. */
+        const call = {
+          _id: Symbol(),
+          fn,
+          args: Array.from(args),
+          resolve,
+          reject,
+        };
+
+        addCall(call);
+      });
     },
   };
 }
