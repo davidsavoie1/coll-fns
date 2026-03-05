@@ -56,6 +56,8 @@ export function createPool({
   /* List of concurrent calls being executed */
   let concurrents = new Set();
 
+  let waitIdleCallbacks = [];
+
   /* Dispatch the call to either be processed, enqueued
    * or to trigger an overflow. */
   function addCall(call) {
@@ -118,7 +120,11 @@ export function createPool({
 
     /* Take next pending call and process it */
     const nextCall = pendings.shift();
-    if (nextCall) processCall(nextCall);
+    if (nextCall) {
+      processCall(nextCall);
+    }
+
+    callbackWhenIdle();
   }
 
   /* eslint-disable no-console */
@@ -215,6 +221,18 @@ export function createPool({
     pendings = newPendings;
   }
 
+  function isIdle() {
+    return !concurrents.size && !pendings.length;
+  }
+
+  /* Execute idle callbacks when pool is idle */
+  function callbackWhenIdle() {
+    if (!isIdle()) return;
+    if (!waitIdleCallbacks.length) return;
+    waitIdleCallbacks.forEach((cb) => cb(true));
+    waitIdleCallbacks = [];
+  }
+
   return {
     /* Add a function and its arguments as a call to be made */
     add(fn, ...args) {
@@ -236,6 +254,8 @@ export function createPool({
 
       /* Clear the pending calls list */
       pendings = [];
+
+      callbackWhenIdle();
     },
 
     /* Same as `add`, but returns a promise settled when the call
@@ -254,6 +274,14 @@ export function createPool({
         };
 
         addCall(call);
+      });
+    },
+
+    waitForIdle() {
+      if (isIdle()) return Promise.resolve(true);
+
+      return new Promise((resolve) => {
+        waitIdleCallbacks.push(resolve);
       });
     },
   };
