@@ -1,4 +1,4 @@
-# NEXT
+# 1.6.0 - 2026-03-05
 
 - Fix | Children observers not awaited before publication ready
 - Allow passing debug locations as an array
