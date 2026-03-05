@@ -62,6 +62,8 @@ const DEBUG = {
  * @property {PublishSelector} [selector] Backward-compatible alias for `on`.
  * @property {Object} [fields]
  * @property {PublishDeps} [deps]
+ * @property {boolean} [awaited=true] If true, this child subtree contributes to publication readiness.
+ * If false, this subtree initializes/reacts in background and does not block `ready()`.
  * @property {(PublishChildArgs|false|null|undefined)[]} [children]
  * @property {boolean|string[]|Object} [debug]
  */
@@ -81,8 +83,7 @@ const DEBUG = {
  * Extra publish runtime options.
  * @typedef {Object} PublishOptions
  * @property {number} [maxConcurrent=10] Maximum concurrent child observer creations.
- * @property {boolean} [waitForAll=true] If true, wait for full initial tree initialization
- * before calling `ready()`. If false, wait only for root observer initialization.
+ * Readiness is controlled per child via `awaited` (default true on each node).
  */
 
 /**
@@ -138,16 +139,7 @@ async function runPublication(publication, args = {}) {
   const log = createDebugLog(args.debug);
 
   /* Remove options that are relevant (or should be discarded) only on root */
-  const {
-    maxConcurrent,
-    on,
-    waitForAll = true, // Should the entire tree initialization be awaited before readiness?
-    ...rest
-  } = args;
-
-  if (typeof waitForAll !== "boolean") {
-    throw new TypeError("'waitForAll' must be a boolean.");
-  }
+  const { maxConcurrent, on, ...rest } = args;
 
   /* Publication-level stop flag to prevent late observers from leaking. */
   let publicationStopped = false;
@@ -164,10 +156,20 @@ async function runPublication(publication, args = {}) {
   /* Map of observers by published document */
   const observersCountByDoc = createRegistry();
 
+  let observer = null;
+  let initializationError = undefined;
+
   /* Initialization only pool */
   const initPool = createPool({
     maxConcurrent: maxConcurrent ?? MAX_CONCURRENT,
     maxPending: Infinity,
+    onError: (err) => {
+      /* Save only first initialization error */
+      if (!initializationError) {
+        initializationError = err;
+      }
+      stopPublication();
+    },
   });
 
   /* Active publication pool */
@@ -198,6 +200,7 @@ async function runPublication(publication, args = {}) {
       deps, // Optional. List of parent field dependencies that must change to invalidate observers.
       debug, // Should debugging messages be displayed? true logs all; array of locations logs selected events; object maps locations to truthy/falsy values
       on = selector, // Link to parent document that will get interpreted as a selector
+      awaited = true, // Should the observer initialization be awaited before readiness?
       ...options // Cursor options
     } = normalizeArgs(args);
 
@@ -284,10 +287,13 @@ async function runPublication(publication, args = {}) {
       /* Prevent registering child if its token has been replaced or removed */
       if (!tokenByFollower.check(followerKey, token)) return;
 
-      const subObserver = await createOrReuseObserver(childArgs, {
-        ancestors,
-        initializing,
-      });
+      const subObserver = await createOrReuseObserver(
+        { awaited, ...childArgs },
+        {
+          ancestors,
+          initializing,
+        }
+      );
 
       if (!subObserver) return;
 
@@ -421,10 +427,11 @@ async function runPublication(publication, args = {}) {
           /* For each added document, create a new subObserver
            * for each child publication. */
           validChildren.forEach((childArgs) => {
-            /* If publication expects children to be initialized
-             * before declaring as ready, add children observers
-             * to a separate intialization pool. */
-            const pool = _initializing && waitForAll ? initPool : activePool;
+            const childAwaited = childArgs.awaited ?? awaited;
+            /* Awaited children are scheduled on initialization pool while this observer
+             * is still in its bootstrap phase. Non-awaited children (or live phase work)
+             * are scheduled on active pool and do not block publication readiness. */
+            const pool = _initializing && childAwaited ? initPool : activePool;
 
             pool.add(registerChildObserver, {
               childArgs,
@@ -665,7 +672,7 @@ async function runPublication(publication, args = {}) {
   /* === AFTER INTERNAL FUNCTIONS === */
 
   /* Create the main publication observer */
-  const observer = await createOrReuseObserver(rest, { initializing: true });
+  observer = await createOrReuseObserver(rest, { initializing: true });
 
   if (!observer) throw new Error("`publish` failed to create root observer");
 
@@ -674,7 +681,7 @@ async function runPublication(publication, args = {}) {
     publicationStopped = true;
 
     /* Immediately stop main observer. */
-    observer.cancel();
+    observer?.cancel?.();
 
     /* Stop all registered observers. */
     observersByQuery.forEach((observer) => observer?.cancel?.());
@@ -696,6 +703,8 @@ async function runPublication(publication, args = {}) {
 
   /* Mark publication as ready after everything has been set up. */
   await initPool.waitForIdle();
+
+  if (initializationError) throw initializationError;
 
   publication.ready();
 

@@ -2,6 +2,7 @@
 
 - Fix | Children observers not awaited before publication ready
 - Allow passing debug locations as an array
+- Allow each child to define its publication readiness contribution
 
 ---
 

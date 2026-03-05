@@ -57,6 +57,7 @@ Stop repeating business logic all over your code base. Define hooks on collectio
 - [Nested reactive publications](#nested-reactive-publications)
   - [When to use `publish`](#when-to-use-publish)
   - [`publish(publication, Coll, selector, options)`](#publishpublication-coll-selector-options)
+  - [Publication readiness](#publication-readiness)
   - [Publication context (`this` in Meteor)](#publication-context-this-in-meteor)
   - [How child declarations work](#how-child-declarations-work)
   - [Ancestors chain](#ancestors-chain)
@@ -1716,13 +1717,18 @@ Meteor.publish("posts.tree", function postsTree() {
 });
 ```
 
+## Publication readiness and concurrency
+
+Readiness is controlled per child with `awaited` (default: `true`):
+
+- `awaited: true`: wait for this child subtree before calling `ready()`
+- `awaited: false`: do not wait for this child subtree; it loads/reacts in background
+
+Use `awaited: true` for data the screen must have immediately, and `awaited: false` for optional or heavy branches.
+If not specified, a child inherits `awaited` from its parent.
+
 `options.maxConcurrent` controls how many child observer creations can run at
-the same time (`10` by default).
-
-`options.waitForAll` controls readiness semantics (`true` by default):
-
-- `true`: call `ready()` only after the full initial observer tree is initialized
-- `false`: call `ready()` as soon as the root observer is initialized (children continue in background)
+the same time (`10` by default). This can only be defined at the publication root, not on children.
 
 Why it matters:
 
@@ -1751,8 +1757,15 @@ Meteor.publish("posts.tree", function postsTree() {
     Posts,
     { status: "published" },
     {
-      ...args,
       maxConcurrent: 5,
+      children: [
+        { Coll: Users, on: ["authorId", "_id"], awaited: true },
+        {
+          Coll: FeatureFlags,
+          on: { scope: "posts_publication" },
+          awaited: false,
+        },
+      ],
     }
   );
 });
@@ -1793,7 +1806,7 @@ Falsy entries are ignored, which allows short-circuit declarations like
 Object entries can be defined with either:
 
 - explicit child args:
-  - `{ Coll, on, fields?, deps?, children?, ...cursorOptions }`
+  - `{ Coll, on, fields?, deps?, awaited?, children?, ...cursorOptions }`
 - join shorthand:
   - `{ join: "joinKey", ...overrides }`
 
