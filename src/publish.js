@@ -164,7 +164,14 @@ async function runPublication(publication, args = {}) {
   /* Map of observers by published document */
   const observersCountByDoc = createRegistry();
 
-  const pool = createPool({
+  /* Initialization only pool */
+  const initPool = createPool({
+    maxConcurrent: maxConcurrent ?? MAX_CONCURRENT,
+    maxPending: Infinity,
+  });
+
+  /* Active publication pool */
+  const activePool = createPool({
     maxConcurrent: maxConcurrent ?? MAX_CONCURRENT,
     maxPending: Infinity,
   });
@@ -179,6 +186,7 @@ async function runPublication(publication, args = {}) {
     /* Internal arguments */
     {
       ancestors = [], // List of ancestor documents
+      initializing = false,
     } = {}
   ) {
     if (publicationStopped) return null;
@@ -263,19 +271,23 @@ async function runPublication(publication, args = {}) {
 
     /* === INTERNAL OBSERVER CREATION FUNCTIONS === */
 
-    async function registerChildObserver(
+    async function registerChildObserver({
       childArgs,
       followerKey,
+      initializing,
       token,
-      ancestors
-    ) {
+      ancestors,
+    }) {
       /* Prevent registering children after observer is cancelled. */
       if (cancelled || publicationStopped) return;
 
       /* Prevent registering child if its token has been replaced or removed */
       if (!tokenByFollower.check(followerKey, token)) return;
 
-      const subObserver = await createOrReuseObserver(childArgs, { ancestors });
+      const subObserver = await createOrReuseObserver(childArgs, {
+        ancestors,
+        initializing,
+      });
 
       if (!subObserver) return;
 
@@ -381,8 +393,7 @@ async function runPublication(publication, args = {}) {
         return null;
       }
 
-      let initializing = true;
-      let initialPromises = [];
+      let _initializing = initializing;
 
       const observeCallbacks = {
         /* When a document is added to the cursor... */
@@ -410,22 +421,18 @@ async function runPublication(publication, args = {}) {
           /* For each added document, create a new subObserver
            * for each child publication. */
           validChildren.forEach((childArgs) => {
-            const callAndArgs = [
-              registerChildObserver,
+            /* If publication expects children to be initialized
+             * before declaring as ready, add children observers
+             * to a separate intialization pool. */
+            const pool = _initializing && waitForAll ? initPool : activePool;
+
+            pool.add(registerChildObserver, {
               childArgs,
               followerKey,
+              initializing: _initializing,
               token,
-              newAncestors,
-            ];
-
-            /* If publication expects children to be initialized
-             * before declaring as ready, generate promises
-             * that will be awaited before returning created observer. */
-            if (initializing && waitForAll) {
-              initialPromises.push(pool.waitFor(...callAndArgs));
-            } else {
-              pool.add(...callAndArgs);
-            }
+              ancestors: newAncestors,
+            });
           });
         },
 
@@ -485,20 +492,21 @@ async function runPublication(publication, args = {}) {
 
             /* Create child observers that are missing from current ones */
             missingEntries.forEach((args) => {
-              pool.add(
-                registerChildObserver,
-                args,
+              /* Document changes are always added on active pool */
+              activePool.add(registerChildObserver, {
+                childArgs: args,
                 followerKey,
+                initializing: false,
                 token,
-                newAncestors
-              );
+                ancestors: newAncestors,
+              });
             });
           }
 
           /* Unfollow current child observers no longer needed */
           currObserversByQueryKey.forEach((obs, queryKey) => {
             if (newArgsByQueryKey.has(queryKey)) return;
-            pool.add(unfollowSubObserver, followerKey, obs);
+            activePool.add(unfollowSubObserver, followerKey, obs);
           });
         },
 
@@ -523,9 +531,10 @@ async function runPublication(publication, args = {}) {
             observersByFollowers.get(followerKey) || new Set();
 
           /* Unfollow each observer linked to this doc follower key. */
-          followerObservers.forEach((subObserver) =>
-            pool.add(unfollowSubObserver, followerKey, subObserver)
-          );
+          followerObservers.forEach((subObserver) => {
+            /* Document removals are always added on active pool */
+            activePool.add(unfollowSubObserver, followerKey, subObserver);
+          });
         },
       };
 
@@ -536,11 +545,7 @@ async function runPublication(publication, args = {}) {
         options
       );
 
-      initializing = false;
-
-      if (initialPromises.length) {
-        await Promise.all(initialPromises);
-      }
+      _initializing = false;
 
       log(DEBUG.CREATED, debugKey);
 
@@ -660,7 +665,7 @@ async function runPublication(publication, args = {}) {
   /* === AFTER INTERNAL FUNCTIONS === */
 
   /* Create the main publication observer */
-  const observer = await createOrReuseObserver(rest);
+  const observer = await createOrReuseObserver(rest, { initializing: true });
 
   if (!observer) throw new Error("`publish` failed to create root observer");
 
@@ -690,6 +695,8 @@ async function runPublication(publication, args = {}) {
   publication.onStop?.(handle.stop);
 
   /* Mark publication as ready after everything has been set up. */
+  await initPool.waitForIdle();
+
   publication.ready();
 
   log(DEBUG.READY);
