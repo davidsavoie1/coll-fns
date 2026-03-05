@@ -178,14 +178,14 @@ export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
   fields?: FieldSpec;
   children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
   deps?: PublishDeps<TParent>;
-  debug?: boolean | Record<string, boolean>;
+  debug?: boolean | string[] | Record<string, boolean>;
 }
 
 export interface PublishOptions<TParent = AnyObject> extends AnyObject {
   fields?: FieldSpec;
   children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
   deps?: PublishDeps<TParent>;
-  debug?: boolean | Record<string, boolean>;
+  debug?: boolean | string[] | Record<string, boolean>;
   maxConcurrent?: number;
   waitForAll?: boolean;
 }

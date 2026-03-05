@@ -63,7 +63,7 @@ const DEBUG = {
  * @property {Object} [fields]
  * @property {PublishDeps} [deps]
  * @property {(PublishChildArgs|false|null|undefined)[]} [children]
- * @property {boolean|Object} [debug]
+ * @property {boolean|string[]|Object} [debug]
  */
 
 /**
@@ -74,7 +74,7 @@ const DEBUG = {
  * @property {Object} [fields]
  * @property {(PublishChildArgs|false|null|undefined)[]} [children]
  * @property {PublishDeps} [deps]
- * @property {boolean|Object} [debug]
+ * @property {boolean|string[]|Object} [debug]
  */
 
 /**
@@ -188,7 +188,7 @@ async function runPublication(publication, args = {}) {
       selector, // Object litteral or function that receives ancestors as arguments
       children = [], // [...{ ...args }] List of arguments to children observers. Non object arguments will be omitted, so they can be conditionally defined.
       deps, // Optional. List of parent field dependencies that must change to invalidate observers.
-      debug, // Should debugging messages be displayed? true will log all. Otherwise, an object of predefined location can be used with thruthy or falsy value to log or not
+      debug, // Should debugging messages be displayed? true logs all; array of locations logs selected events; object maps locations to truthy/falsy values
       on = selector, // Link to parent document that will get interpreted as a selector
       ...options // Cursor options
     } = normalizeArgs(args);
@@ -1030,8 +1030,16 @@ async function interpretSelector(selector, ancestors = []) {
 }
 
 function createDebugLog(debug) {
+  const hasLocation = (location) => {
+    if (!debug) return false;
+    if (debug === true) return true;
+    if (isArr(debug)) return debug.includes(location);
+    if (isObj(debug)) return !!debug[location];
+    return false;
+  };
+
   return function log(location, ...content) {
-    if (debug && (debug === true || debug?.[location])) {
+    if (hasLocation(location)) {
       // eslint-disable-next-line no-console
       console.log(location, ...content);
     }

@@ -1,6 +1,7 @@
 # NEXT
 
 - Fix | Children observers not awaited before publication ready
+- Allow passing debug locations as an array
 
 ---
 

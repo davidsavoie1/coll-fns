@@ -1876,20 +1876,33 @@ For array selectors, implicit deps are auto-derived from the `from` key.
 `publish()` supports lightweight lifecycle debugging with:
 
 - `debug: true` to log all internal debug events
+- `debug: ["EVENT_NAME", ...]` to log selected events only
 - `debug: { EVENT_NAME: true, ... }` to log selected events only
 
-Examples of event names include:
+Observer events:
 
-- `CREATED`, `REUSED`
-- `INVALIDATED`
-- `DOC_ADDED`, `DOC_CHANGED`, `DOC_REMOVED`
-- `CANCELLED`, `UNFOLLOWED`, `STOPPED`, `READY`
+- `CREATED`: a new observer was successfully created and registered.
+- `BYPASSED`: observer creation was skipped because selector resolved to a void selector.
+- `REUSED`: an existing observer for the same query key was reused.
+- `INVALIDATED`: child observer graph for a parent document was recomputed after relevant parent changes.
+- `UNFOLLOWED`: one follower link to a sub-observer was removed.
+- `CANCELLED`: an observer was cancelled and its local cleanup started.
+
+Observer documents events:
+
+- `DOC_ADDED`: a document was published through `added`.
+- `DOC_CHANGED`: a published document emitted a `changed` update.
+- `DOC_REMOVED`: a document was removed from publication (observer count for that document dropped to zero).
+
+Publication events (available on root only):
+
+- `READY`: emitted once when `publish()` calls `publication.ready()`.
+- `STOPPED`: emitted once when the publication stop handler runs.
 
 Debug scope:
 
-- Root `debug` applies to the root observer.
-- Explicit children can override with their own `debug`.
-- Join-shorthand children (`{ join: "x", ... }`) can also provide `debug`.
+- Root `debug` applies to the root observer and root publication locations (`READY`, `STOPPED`).
+- Each child defines its own `debug` argument.
 - Implicit join-derived children (from parent `fields`) inherit parent `debug`.
 
 ## Built-in optimizations
