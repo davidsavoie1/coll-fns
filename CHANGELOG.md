@@ -1,3 +1,9 @@
+# NEXT
+
+- Ensure explicit array join `on` fields are used by parent query
+
+---
+
 # 1.6.0 - 2026-03-05
 
 - Fix | Children observers not awaited before publication ready

@@ -919,9 +919,9 @@ function deriveArgsDeps({ deps, selector, on = selector }) {
 /* Normalize deps to return either
  * - true = always invalidate
  * - false = never invalidate
- * - [] = List of keys the changed `fields` must include to invalidate
- * - Object = list of top-level truthy keys
- * - Function (fields, ...ancestors) => normalized deps
+ * - [] = list of keys the changed `fields` must include to invalidate
+ * - Function = dynamically normalized deps
+ * - undefined = unspecified deps
  *
  * Note: key matching is flat and exact against changed fields keys. */
 function normalizeDeps(deps) {
@@ -1141,11 +1141,28 @@ function normalizeArgs({
     joinToArgs(Coll, joinKey, { debug, fields: joinFields[joinKey] })
   );
 
+  const allChildren = [...normalizedChildren, ...additionalJoinChildren];
+
+  /* Children can depend on parent fields to compute their selectors.
+   * Ensure those parent fields are present in the parent observer projection. */
+  const ownFieldKeysFromDeps = allChildren.flatMap((childArgs) =>
+    deriveParentFieldDeps(childArgs)
+  );
+
+  const ownFieldsFromDeps = Object.fromEntries(
+    Array.from(new Set(ownFieldKeysFromDeps)).map((key) => [key, 1])
+  );
+
+  const ownFieldsWithDeps =
+    fields === undefined || ownFields === undefined
+      ? ownFields
+      : { ...ownFields, ...ownFieldsFromDeps };
+
   return {
     Coll,
     selector,
-    fields: ownFields,
-    children: [...normalizedChildren, ...additionalJoinChildren],
+    fields: ownFieldsWithDeps,
+    children: allChildren,
     deps,
     debug,
     on,
@@ -1180,4 +1197,23 @@ function joinToArgs(Coll, joinKey, rest) {
     limit: single ? 1 : limit,
     ...rest,
   };
+}
+
+function deriveParentFieldDeps({ deps, selector, on = selector }) {
+  const parentFieldDeps = new Set();
+
+  if (isArr(on)) {
+    const [from] = on;
+    const fromDep = isArr(from) ? from[0] : from;
+    if (typeof fromDep === "string") parentFieldDeps.add(fromDep);
+  }
+
+  const normalizedDeps = normalizeDeps(deps);
+  if (!isArr(normalizedDeps)) return Array.from(parentFieldDeps);
+
+  normalizedDeps.forEach((dep) => {
+    if (typeof dep === "string") parentFieldDeps.add(dep);
+  });
+
+  return Array.from(parentFieldDeps);
 }
