@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid/non-secure";
 import { getProtocol } from "./protocol";
 import { fetchOne } from "./fetch";
-import { hasOwn, isArr, isFunc, isObj } from "./util";
+import { createTokensRegistry, hasOwn, isArr, isFunc, isObj } from "./util";
 import { createPool } from "./pool";
 import { dispatchFields } from "./fields";
 import { getJoins } from "./join";
@@ -262,6 +262,10 @@ async function runPublication(publication, args = {}) {
     /* Map of token by followerKey to ensure only latest operation succeeds */
     const tokenByFollower = createTokensRegistry();
 
+    /* Map of sequential numbers by followerKey that will be issued
+     * at the start of `changed` callback with children. */
+    const changedSeqByFollower = createTokensRegistry((prev = 0) => prev + 1);
+
     let resolveCreation, rejectCreation;
     const creationPromise = new Promise((resolve, reject) => {
       resolveCreation = resolve;
@@ -328,6 +332,15 @@ async function runPublication(publication, args = {}) {
 
       /* subObserver can still be active for another observer
        * using the same query key, so keep it in query observers register. */
+    }
+
+    function unfollowSubObserverIfCurrent(
+      followerKey,
+      subObserver,
+      unfollowToken
+    ) {
+      if (!tokenByFollower.check(followerKey, unfollowToken)) return;
+      unfollowSubObserver(followerKey, subObserver);
     }
 
     /* Return a Map of `queryKey => observer` for a specific `followerKey` */
@@ -454,6 +467,13 @@ async function runPublication(publication, args = {}) {
           /* If no child publication, no further processing required. */
           if (!validChildren?.length) return;
 
+          /* Recreate the follower key that was used when doc was added. */
+          const followerKey = createFollowerKey(_id);
+
+          /* Attribute a new sequential token to the change
+           * so we can keep track of `changed` order */
+          const changedSeq = changedSeqByFollower.generate(followerKey);
+
           /* Fetch the updated doc with the fields defined in the cusor options
            * in order to recompute the children selectors and invalidate those
            * that have changed. */
@@ -463,6 +483,12 @@ async function runPublication(publication, args = {}) {
             { fields: options.fields, transform: null }
           );
 
+          /* No current parent state exists; supersede in-flight changed reconciliations. */
+          if (!updatedDoc) {
+            changedSeqByFollower.register(followerKey);
+            return;
+          }
+
           const newAncestors = [updatedDoc, ...ancestors];
 
           /* If deps are defined, invalidate observers only when
@@ -471,11 +497,16 @@ async function runPublication(publication, args = {}) {
             fields,
             ...newAncestors
           );
-          if (!invalidated) return;
-          log(DEBUG.INVALIDATED, debugKey);
 
-          /* Recreate the follower key that was used when doc was added. */
-          const followerKey = createFollowerKey(_id);
+          if (!invalidated) return;
+
+          /* If invalidated, register the token as current and proceed
+           * unless a more recent change (higher sequence) was already registered. */
+          if (changedSeqByFollower.get(followerKey) > changedSeq) return;
+
+          changedSeqByFollower.register(followerKey, changedSeq);
+
+          log(DEBUG.INVALIDATED, debugKey);
 
           const currObserversByQueryKey =
             await getObserversByQueryKey(followerKey);
@@ -486,6 +517,12 @@ async function runPublication(publication, args = {}) {
             validChildren
           );
 
+          /* After async work, token must still be the last one registered
+           * for the entries to be adjusted */
+          if (!changedSeqByFollower.check(followerKey, changedSeq)) return;
+
+          const token = tokenByFollower.register(followerKey);
+
           const missingEntries = Array.from(newArgsByQueryKey.entries()).reduce(
             (acc, [queryKey, args]) => {
               if (currObserversByQueryKey.has(queryKey)) return acc;
@@ -495,8 +532,6 @@ async function runPublication(publication, args = {}) {
           );
 
           if (missingEntries.length) {
-            const token = tokenByFollower.register(followerKey);
-
             /* Create child observers that are missing from current ones */
             missingEntries.forEach((args) => {
               /* Document changes are always added on active pool */
@@ -513,7 +548,12 @@ async function runPublication(publication, args = {}) {
           /* Unfollow current child observers no longer needed */
           currObserversByQueryKey.forEach((obs, queryKey) => {
             if (newArgsByQueryKey.has(queryKey)) return;
-            activePool.add(unfollowSubObserver, followerKey, obs);
+            activePool.add(
+              unfollowSubObserverIfCurrent,
+              followerKey,
+              obs,
+              token
+            );
           });
         },
 
@@ -529,9 +569,12 @@ async function runPublication(publication, args = {}) {
           /* Recreate the follower key that was used when doc was added. */
           const followerKey = createFollowerKey(_id);
 
+          /* Increment changed sequence to invalidate in-flight changes. */
+          changedSeqByFollower.register(followerKey);
+
           /* Invalidate previous token for this follower
            * to ensure no previous child observer creation is allowed */
-          tokenByFollower.remove(followerKey);
+          tokenByFollower.reset(followerKey);
 
           /* Retrieve follower observers from the registry */
           const followerObservers =
@@ -1059,26 +1102,6 @@ function createDebugLog(debug) {
       // eslint-disable-next-line no-console
       console.log(location, ...content);
     }
-  };
-}
-
-function createTokensRegistry() {
-  const registry = new Map();
-
-  return {
-    check(followerKey, token) {
-      return registry.get(followerKey) === token;
-    },
-
-    register(followerKey) {
-      const token = nanoid();
-      registry.set(followerKey, token);
-      return token;
-    },
-
-    remove(followerKey) {
-      registry.delete(followerKey);
-    },
   };
 }
 

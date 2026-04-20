@@ -1,3 +1,5 @@
+import { nanoid } from "nanoid/non-secure";
+
 /* No-op function definition */
 const NOOP = () => {};
 
@@ -344,4 +346,68 @@ export function hasOwn(obj, key) {
   return Object.hasOwn
     ? Object.hasOwn(obj, key)
     : Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+export function createTokensRegistry(
+  generatorFn = () => nanoid() // (prevToken)
+) {
+  const generated = new Map();
+  const registered = new Map();
+
+  function last(key) {
+    return generated.get(key);
+  }
+
+  function generate(key) {
+    const lastToken = last(key);
+    const token = generatorFn(lastToken);
+    generated.set(key, token);
+    return token;
+  }
+
+  function unsetMap(map, key) {
+    if (key == undefined) {
+      map.clear();
+    } else {
+      map.delete(key);
+    }
+  }
+
+  return {
+    /* Check if the provided token is the one
+     * currently registered for the key. */
+    check(key, token) {
+      return registered.get(key) === token;
+    },
+
+    get(key) {
+      return registered.get(key);
+    },
+
+    /* Generate a new token for the key */
+    generate,
+
+    /* Return the latest generated token */
+    last,
+
+    /* Register a token for the key.
+     * Either create a token right away or pass one to register. */
+    register(key, token = generate(key)) {
+      registered.set(key, token);
+      return token;
+    },
+
+    /* Unregister both current token and generator
+     * for the key or for all of them if no key provided. */
+    reset(key) {
+      unsetMap(generated, key);
+      unsetMap(registered, key);
+    },
+
+    /* Unregister the current token for the key
+     * or all of them if no key provided. */
+    unregister(key) {
+      unsetMap(registered, key);
+    },
+  };
 }
