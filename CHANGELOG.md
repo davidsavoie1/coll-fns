@@ -1,4 +1,4 @@
-# NEXT
+# 1.6.1 - 2026-04-20
 
 - Ensure explicit array join `on` fields are used by parent query
 - Prevent `changed` publish callback race condition by enforcing sequential processing
