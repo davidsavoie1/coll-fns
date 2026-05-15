@@ -1,3 +1,10 @@
+# NEXT
+
+- Fix | Reuse by query key in publish is inconsistent
+- Always normalize child arguments to create query key
+
+---
+
 # 1.6.1 - 2026-04-20
 
 - Ensure explicit array join `on` fields are used by parent query

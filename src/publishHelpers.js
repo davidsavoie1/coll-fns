@@ -89,7 +89,13 @@ export async function deriveArgsByQueryKey(ancestors, children) {
 
   const entries = await Promise.all(
     children.map(async (childArgs) => {
-      const { Coll, selector, children, on = selector, ...options } = childArgs;
+      const {
+        Coll,
+        selector,
+        children,
+        on = selector,
+        ...options
+      } = normalizeArgs(childArgs);
 
       const actSelector = await interpretSelector(on, ancestors);
 
