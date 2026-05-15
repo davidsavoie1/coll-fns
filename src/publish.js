@@ -165,6 +165,14 @@ async function runPublication(publication, args = {}) {
   /* Map of observers by published document */
   const observersCountByDoc = createRegistry();
 
+  /* Map of latest reconciled query keys a follower desires */
+  const desiredQueryKeysByFollower = new Map();
+
+  function isObserverDesired(followerKey, observer) {
+    const desiredQueryKeys = desiredQueryKeysByFollower.get(followerKey);
+    return desiredQueryKeys?.has(observer.queryKey);
+  }
+
   let observer = null;
   let initializationError = undefined;
 
@@ -310,13 +318,17 @@ async function runPublication(publication, args = {}) {
 
       if (!subObserver) return;
 
-      /* Check again after promise. If created too late, drop it safely. */
-      if (
-        cancelled ||
-        publicationStopped ||
-        !tokenByFollower.check(followerKey, token)
-      ) {
+      /* Check again after promise. If created too late, drop it safely,
+       * but only if no follower is still interested. */
+      if (cancelled || publicationStopped) {
         subObserver.unfollowMaybeCancel(followerKey);
+        return;
+      }
+
+      if (!tokenByFollower.check(followerKey, token)) {
+        if (!isObserverDesired(followerKey, subObserver)) {
+          subObserver.unfollowMaybeCancel(followerKey);
+        }
         return;
       }
 
@@ -349,6 +361,9 @@ async function runPublication(publication, args = {}) {
       unfollowToken
     ) {
       if (!tokenByFollower.check(followerKey, unfollowToken)) return;
+
+      if (isObserverDesired(followerKey, subObserver)) return;
+
       unfollowSubObserver(followerKey, subObserver);
     }
 
@@ -530,6 +545,12 @@ async function runPublication(publication, args = {}) {
            * for the entries to be adjusted */
           if (!changedSeqByFollower.check(followerKey, changedSeq)) return;
 
+          /* Register the query keys the follower is still interested in */
+          desiredQueryKeysByFollower.set(
+            followerKey,
+            new Set(newArgsByQueryKey.keys())
+          );
+
           const token = tokenByFollower.register(followerKey);
 
           const missingEntries = Array.from(newArgsByQueryKey.entries()).reduce(
@@ -577,6 +598,9 @@ async function runPublication(publication, args = {}) {
 
           /* Recreate the follower key that was used when doc was added. */
           const followerKey = createFollowerKey(_id);
+
+          /* Remove follower from desired query keys Map */
+          desiredQueryKeysByFollower.delete(followerKey);
 
           /* Increment changed sequence to invalidate in-flight changes. */
           changedSeqByFollower.register(followerKey);
@@ -742,6 +766,7 @@ async function runPublication(publication, args = {}) {
      * Probably redundant since registries are inside the publication closure. */
     observersByQuery.clear();
     observersByFollowers.clear();
+    desiredQueryKeysByFollower.clear();
 
     log(DEBUG.STOPPED);
   }

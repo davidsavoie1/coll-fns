@@ -2,6 +2,7 @@
 
 - Fix | Reuse by query key in publish is inconsistent
 - Always normalize child arguments to create query key
+- Add additional race condition guards in publish
 
 ---
 
