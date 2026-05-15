@@ -1,4 +1,4 @@
-# NEXT
+# 1.6.2 - 2026-05-15
 
 - Fix | Reuse by query key in publish is inconsistent
 - Always normalize child arguments to create query key
