@@ -8,6 +8,7 @@ export interface FieldSpec {
 }
 
 export interface FetchOptions<TDoc = AnyObject> extends AnyObject {
+  ctx?: JoinContext;
   fields?: FieldSpec;
   sort?: AnyObject;
   limit?: number;
@@ -84,6 +85,34 @@ export interface JoinDef<TParent = AnyObject> extends AnyObject {
   limit?: number;
 }
 
+export type JoinDefinitions<TParent = AnyObject> = Record<
+  string,
+  JoinDef<TParent> | null | undefined | false
+>;
+
+/** Minimal contract accepted by fetch and publish for resolving joins. */
+export interface JoinContext {
+  getJoins<TColl>(
+    Coll: TColl
+  ): JoinDefinitions | null | undefined;
+  getJoinPrefix?(): string | null;
+}
+
+/** Reusable local context created by createJoinContext(). */
+export interface LocalJoinContext extends JoinContext {
+  getJoinPrefix(): string | null;
+  join<TColl>(
+    Coll: TColl,
+    joins?: JoinDefinitions | null | undefined | false
+  ): this;
+  setJoinPrefix(prefix: string | null): this;
+}
+
+export interface JoinContextOptions {
+  defaultToGlobal?: boolean;
+  prefix?: string | null;
+}
+
 export type HookType =
   | "beforeInsert"
   | "beforeUpdate"
@@ -149,7 +178,7 @@ export interface SoftRemoveOptions {
   detailed?: boolean;
 }
 
-export type PublishJoinSelector = [string | [string], string | [string], AnyObject?];
+export type PublishJoinSelector = JoinArrayOn;
 
 export type PublishSelector<TParent = AnyObject> =
   | AnyObject
@@ -185,6 +214,7 @@ export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
 }
 
 export interface PublishOptions<TParent = AnyObject> extends AnyObject {
+  ctx?: JoinContext;
   fields?: FieldSpec;
   children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
   deps?: PublishDeps<TParent>;
@@ -244,10 +274,16 @@ export function insert<TColl>(Coll: TColl, doc: AnyObject): MaybePromise<any>;
 
 export function join<TColl>(
   Collection: TColl,
-  joins?: Record<string, JoinDef> | null | undefined | false
+  joins?: JoinDefinitions | null | undefined | false
 ): void;
 
-export function getJoins<TColl>(Coll: TColl): Record<string, JoinDef>;
+export function createJoinContext(
+  options?: JoinContextOptions
+): LocalJoinContext;
+
+export function getJoins<TColl>(
+  Coll: TColl
+): JoinDefinitions;
 export function getJoinPrefix(): string | null;
 export function setJoinPrefix(prefix: string | null): void;
 

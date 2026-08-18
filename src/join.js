@@ -1,5 +1,16 @@
 import { isFunc, typeOf, warn } from "./util";
 
+const PREFIX = Symbol("PREFIX");
+
+/**
+ * Optional prefix used to distinguish join fields within the `fields` option.
+ * If set, join fields must be specified under this prefix, e.g.:
+ * { fields: { [joinPrefix]: { author: 1, comments: { user: 1 } } } }
+ * If falsy, join fields may be mixed with base fields and detected by their names.
+ * @type {string|null}
+ */
+const DEFAULT_PREFIX = null;
+
 /**
  * Allowed runtime types for the `on` property in a join definition.
  * - 'array'    => [fromProp, toProp, toSelector?]
@@ -13,20 +24,12 @@ const knownTypesCaption = KNOWN_TYPES.join("', '");
 
 /**
  * Global registry of join definitions per collection instance.
+ * Global join context will eventually get initialized only once.
  * Map<Collection, Record<string, JoinDef>>
- * @type {Map<*, Record<string, JoinDef>|undefined>}
+ * @type {Map<*, Record<string, JoinDef>|null|undefined>}
  * @internal
  */
-let joinsDictionary = new Map();
-
-/**
- * Optional prefix used to distinguish join fields within the `fields` option.
- * If set, join fields must be specified under this prefix, e.g.:
- * { fields: { [joinPrefix]: { author: 1, comments: { user: 1 } } } }
- * If falsy, join fields may be mixed with base fields and detected by their names.
- * @type {string|null}
- */
-let joinPrefix = null;
+let globalJoinsDictionary = undefined;
 
 /**
  * @typedef {string | [string]} JoinArrayProp
@@ -76,13 +79,15 @@ let joinPrefix = null;
  * Validates join shapes and emits warnings for potentially unsafe definitions.
  *
  * Notes:
- * - Calling with `joins` falsy clears existing joins for the collection.
+ * - Calling with `joins` falsy disables all joins for the collection.
+ * - Falsy entries in `joins` disable individual joins. In a local context,
+ *   they also mask definitions inherited from the global dictionary.
  * - If `on` is a function and no `deps` are declared for the join, a warning is emitted,
  *   because required linking keys may not be fetched unless explicitly requested.
  *
  * @template TColl
  * @param {TColl} Collection - The collection instance to attach joins to.
- * @param {Record<string, JoinDef>|undefined|null|false} joins - Map of joinKey -> join definition.
+ * @param {Record<string, JoinDef|null|undefined|false>|undefined|null|false} joins - Map of joinKey -> join definition.
  * @example
  * join(Posts, {
  *   author: {
@@ -98,15 +103,20 @@ let joinPrefix = null;
  *   }
  * });
  */
-export function join(Collection, joins) {
+export function join(Collection, joins, dict = getGlobalJoinsDict()) {
   if (!joins) {
-    // Explicitly set to undefined to signal no joins for this collection
-    joinsDictionary.set(Collection, undefined);
+    // Explicitly set to null to signal no joins for this collection
+    dict.set(Collection, null);
     return;
   }
 
-  Object.entries(joins).forEach(
-    ([key, { Coll, on, fields, deps = fields }]) => {
+  const existingJoins = getJoins(Collection, dict);
+
+  const normalizedJoins = Object.fromEntries(
+    Object.entries(joins).map(([key, join]) => {
+      if (!join) return [key, null];
+
+      const { Coll, on, fields, deps = fields } = join;
       if (!Coll) {
         throw new Error(`Collection 'Coll' for '${key}' join is required.`);
       }
@@ -129,25 +139,33 @@ export function join(Collection, joins) {
           `Join '${key}' is defined with a function 'on', but no 'deps' are explicitly specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`
         );
       }
-    }
+
+      return [key, join];
+    })
   );
 
-  // Merge new join defs with existing ones on this collection
-  joinsDictionary.set(Collection, {
-    ...joinsDictionary.get(Collection),
-    ...joins,
+  /* Merge new join defs with existing ones on this collection.
+   * `null` joins will remove existing ones. */
+  dict.set(Collection, {
+    ...existingJoins,
+    ...normalizedJoins,
   });
 }
 
 /**
- * Retrieve declared joins for a collection.
+ * Retrieve declared joins for a collection. Default to empty object {}.
  *
  * @template TColl
  * @param {TColl} Coll - The collection instance.
- * @returns {Record<string, JoinDef>} The join definitions keyed by join name.
+ * @returns {Record<string, JoinDef>} The join definitions keyed by join name,
+ * or an empty object when none are defined.
  */
-export function getJoins(Coll) {
-  return joinsDictionary.get(Coll) || {};
+export function getJoins(Coll, dict = getGlobalJoinsDict()) {
+  return _getJoins(Coll, dict) || {};
+}
+
+function _getJoins(Coll, dict = getGlobalJoinsDict()) {
+  return dict.get(Coll);
 }
 
 /**
@@ -155,8 +173,8 @@ export function getJoins(Coll) {
  * If set, join fields should be nested under this key within `fields`.
  * @returns {string|null} The prefix (e.g., '+') or null if not set.
  */
-export function getJoinPrefix() {
-  return joinPrefix;
+export function getJoinPrefix(dict = getGlobalJoinsDict()) {
+  return dict.get(PREFIX);
 }
 
 /**
@@ -169,6 +187,84 @@ export function getJoinPrefix() {
  * // later in queries:
  * // fetch(Posts, {}, { fields: { '+': { author: 1, comments: 1 }, title: 1 } })
  */
-export function setJoinPrefix(prefix) {
-  joinPrefix = prefix;
+export function setJoinPrefix(prefix, dict = getGlobalJoinsDict()) {
+  dict.set(PREFIX, prefix);
+}
+
+/**
+ * Create a reusable local join context.
+ *
+ * By default, local definitions are merged over the global join dictionary.
+ * `defaultToGlobal: false` creates an isolated context instead. Definitions can
+ * override or disable global joins without mutating them. The prefix belongs to
+ * the context and is inherited by every level of a fetch or publication tree.
+ *
+ * @param {Object} [options]
+ * @param {boolean} [options.defaultToGlobal=true]
+ * @param {string|null} [options.prefix=getJoinPrefix()]
+ * @returns {{getJoins: Function, getJoinPrefix: Function, join: Function, setJoinPrefix: Function}}
+ */
+export function createJoinContext({
+  defaultToGlobal = true,
+  prefix = getJoinPrefix(),
+} = {}) {
+  const dict = new Map([[PREFIX, prefix]]);
+
+  return {
+    getJoins(Coll) {
+      const ownJoins = _getJoins(Coll, dict);
+
+      /* Allow explicit join disabling by setting joins to null */
+      if (ownJoins === null) return null;
+
+      if (!defaultToGlobal) return ownJoins;
+
+      const globalJoins = _getJoins(Coll);
+      return { ...(globalJoins || {}), ...(ownJoins || {}) };
+    },
+
+    getJoinPrefix() {
+      return getJoinPrefix(dict);
+    },
+
+    join(Coll, joins) {
+      join(Coll, joins, dict);
+      /* Return `this` to allow chaining */
+      return this;
+    },
+
+    setJoinPrefix(prefix) {
+      setJoinPrefix(prefix, dict);
+      /* Return `this` to allow chaining */
+      return this;
+    },
+  };
+}
+
+/**
+ * Resolve and bind the join operations exposed by a context, falling back to
+ * the global dictionary for operations the context does not implement.
+ * This also supports custom context objects with their own internal state.
+ *
+ * @param {Object} [ctx]
+ * @returns {{getJoins: Function, getJoinPrefix: Function, join: Function, setJoinPrefix: Function}}
+ * @internal
+ */
+export function useJoinContext(ctx) {
+  return {
+    getJoins: ctx?.getJoins ? ctx.getJoins.bind(ctx) : _getJoins,
+    getJoinPrefix: ctx?.getJoinPrefix
+      ? ctx.getJoinPrefix.bind(ctx)
+      : getJoinPrefix,
+    join: ctx?.join ? ctx.join.bind(ctx) : join,
+    setJoinPrefix: ctx?.setJoinPrefix
+      ? ctx.setJoinPrefix.bind(ctx)
+      : setJoinPrefix,
+  };
+}
+
+function getGlobalJoinsDict() {
+  if (globalJoinsDictionary) return globalJoinsDictionary;
+  globalJoinsDictionary = new Map([[PREFIX, DEFAULT_PREFIX]]);
+  return globalJoinsDictionary;
 }

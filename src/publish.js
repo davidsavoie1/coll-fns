@@ -81,6 +81,7 @@ const DEBUG = {
  * Root publish args.
  * @typedef {Object} PublishArgs
  * @property {*} Coll
+ * @property {Object} [ctx] Join context shared by the complete publication tree.
  * @property {PublishSelector} selector Root selector passed as `publish(..., selector, ...)`.
  * @property {Object} [fields]
  * @property {(PublishChildArgs|false|null|undefined)[]} [children]
@@ -92,6 +93,7 @@ const DEBUG = {
  * Extra publish runtime options.
  * @typedef {Object} PublishOptions
  * @property {number} [maxConcurrent=10] Maximum concurrent child observer creations.
+ * @property {Object} [ctx] Join context used for the complete publication tree.
  * Readiness is controlled per child via `awaited` (default true on each node).
  */
 
@@ -212,6 +214,7 @@ async function runPublication(publication, args = {}) {
 
     const {
       Coll, // Meteor collection instance
+      ctx, // Root join context shared by this observer and all descendants
       selector, // Object litteral or function that receives ancestors as arguments
       children = [], // [...{ ...args }] List of arguments to children observers. Non object arguments will be omitted, so they can be conditionally defined.
       deps, // Optional. List of parent field dependencies that must change to invalidate observers.
@@ -309,7 +312,7 @@ async function runPublication(publication, args = {}) {
       if (!tokenByFollower.check(followerKey, token)) return;
 
       const subObserver = await createOrReuseObserver(
-        { awaited, ...childArgs },
+        { awaited, ...childArgs, ctx },
         {
           ancestors,
           initializing,
@@ -538,7 +541,8 @@ async function runPublication(publication, args = {}) {
           /* Recompute the children query keys from new version of doc */
           const newArgsByQueryKey = await deriveArgsByQueryKey(
             newAncestors,
-            validChildren
+            validChildren,
+            ctx
           );
 
           /* After async work, token must still be the last one registered

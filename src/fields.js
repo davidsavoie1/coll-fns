@@ -81,12 +81,21 @@ export function flattenFields(fields, root) {
  *
  * @param {FieldSpec|undefined} fields - Field projection that may include join fields.
  * @param {Record<string, any>} [joins={}] - Join definitions keyed by join name.
+ * @param {string|null} [joinPrefix=getJoinPrefix()] - Prefix from the active join context.
  * @returns {{ _: Record<string, boolean>|undefined, '+': FieldSpec|undefined }}
  */
-export function dispatchFields(fields, joins = {}) {
+export function dispatchFields(
+  fields,
+  joins = {},
+  joinPrefix = getJoinPrefix()
+) {
   if (!isObj(fields)) return { _: normalizeFields(fields) };
 
-  const { "+": joinFields, ...ownFields } = isolateJoinFields(fields, joins);
+  const { "+": joinFields, ...ownFields } = isolateJoinFields(
+    fields,
+    joins,
+    joinPrefix
+  );
 
   if (!joinFields) {
     return { _: normalizeFields(ownFields, true), "+": undefined };
@@ -102,7 +111,11 @@ export function dispatchFields(fields, joins = {}) {
   // Otherwise, ensure we include any deps fields required by the join definitions
   // (on/from keys and/or explicit fields deps defined on the join).
   const augmentedOwnFields = Object.keys(joinFields).reduce((acc, joinKey) => {
-    const { on, fields: _joinFields, deps = _joinFields } = joins[joinKey];
+    const join = joins[joinKey];
+
+    if (!join) return acc;
+
+    const { on, fields: _joinFields, deps = _joinFields } = join;
 
     const onFields = Array.isArray(on) ? { [on[0]]: 1 } : undefined;
     if (!(onFields || deps)) return acc;
@@ -198,18 +211,18 @@ function removeFalsyFields(fields) {
  * Returned join fields are validated against the provided joins
  * and non-join fields remain at the root level.
  *
- * Behavior depends on the configured join prefix (via getJoinPrefix()):
+ * Behavior depends on the join prefix provided by the active context:
  * - If a prefix exists, only fields under that key are considered join fields.
  * - If not, any field whose key exists in `joins` is treated as a join field.
  *
  * @param {FieldSpec} fields - Original fields projection.
  * @param {Record<string, any>} [joins={}] - Join definitions keyed by join name.
+ * @param {string|null} joinPrefix - Prefix from the active join context.
  * @returns {{ '+': FieldSpec|undefined } & FieldSpec} Fields split between join and own keys.
  * @internal
  */
-function isolateJoinFields(fields, joins = {}) {
+function isolateJoinFields(fields, joins = {}, joinPrefix) {
   const joinKeys = Object.keys(joins);
-  const joinPrefix = getJoinPrefix();
 
   if (joinPrefix) {
     const { [joinPrefix]: joinFields, ...ownFields } = fields;
@@ -245,10 +258,12 @@ function isolateJoinFields(fields, joins = {}) {
  * @param {FieldSpec|undefined} fields - Field projection possibly containing the join key.
  * @returns {FieldSpec|undefined} A new fields object with decremented depth, or the original.
  */
-export function decrementRecursiveField(key, fields) {
+export function decrementRecursiveField(
+  key,
+  fields,
+  joinPrefix = getJoinPrefix()
+) {
   if (!isObj(fields)) return fields;
-
-  const joinPrefix = getJoinPrefix();
 
   const prev = joinPrefix ? fields[joinPrefix]?.[key] : fields[key];
 

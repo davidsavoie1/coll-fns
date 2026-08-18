@@ -1,5 +1,5 @@
 import { dispatchFields } from "./fields";
-import { getJoins } from "./join";
+import { useJoinContext } from "./join";
 import { getProtocol } from "./protocol";
 import { getArrayJoinSelector, VOID_SELECTOR } from "./selectors";
 import { hasOwn, isArr, isFunc, isObj } from "./util";
@@ -82,7 +82,7 @@ export function createQueryKey(Coll, selector = {}, options = {}) {
 }
 
 /* Build query-key index for child args after resolving selectors from ancestors. */
-export async function deriveArgsByQueryKey(ancestors, children) {
+export async function deriveArgsByQueryKey(ancestors, children, ctx) {
   if (!children?.length) return new Map();
 
   const entries = await Promise.all(
@@ -93,7 +93,7 @@ export async function deriveArgsByQueryKey(ancestors, children) {
         children,
         on = selector,
         ...options
-      } = normalizeArgs(childArgs);
+      } = normalizeArgs({ ...childArgs, ctx });
 
       const actSelector = await interpretJoinSelector(on, ancestors);
 
@@ -331,11 +331,13 @@ export function createDebugLog(debug) {
  * - every child must be an object or a falsy value to ignore
  * - a join key cannot be declared both explicitly in `children`
  *   and implicitly in parent `fields` join section
+ * - the root join context is used for the complete child tree
  * - parent own fields are separated from join fields and only own fields
  *   remain on the normalized parent args
  */
 export function normalizeArgs({
   Coll,
+  ctx,
   children = [],
   deps,
   debug,
@@ -344,12 +346,19 @@ export function normalizeArgs({
   on = selector,
   ...rest
 }) {
-  const joins = getJoins(Coll);
+  const { getJoinPrefix, getJoins } = useJoinContext(ctx);
+
+  const joins = getJoins(Coll) || {};
 
   /* Partition field spec into own (base collection) and join fields ('+') */
-  const { _: ownFields, "+": joinFields = {} } = dispatchFields(fields, joins);
+  const { _: ownFields, "+": joinFields = {} } = dispatchFields(
+    fields,
+    joins,
+    getJoinPrefix()
+  );
 
-  const joinKeys = Object.keys(joinFields);
+  /* Keep only keys of defined joins */
+  const joinKeys = Object.keys(joinFields).filter((k) => joins[k]);
 
   const normalizedChildren = children.reduce((acc, childArgs) => {
     if (!childArgs) {
@@ -372,11 +381,11 @@ export function normalizeArgs({
       );
     }
 
-    return [...acc, joinToArgs(Coll, explicitJoinKey, rest)];
+    return [...acc, joinToArgs(Coll, explicitJoinKey, getJoins, rest)];
   }, []);
 
   const additionalJoinChildren = joinKeys.map((joinKey) =>
-    joinToArgs(Coll, joinKey, { debug, fields: joinFields[joinKey] })
+    joinToArgs(Coll, joinKey, getJoins, { debug, fields: joinFields[joinKey] })
   );
 
   const allChildren = [...normalizedChildren, ...additionalJoinChildren];
@@ -398,6 +407,7 @@ export function normalizeArgs({
 
   return {
     Coll,
+    ctx,
     selector,
     fields: ownFieldsWithDeps,
     children: allChildren,
@@ -415,8 +425,8 @@ export function normalizeArgs({
  * It intentionally does not recursively normalize descendants here.
  * Descendant args are normalized later when their own observer is created.
  */
-function joinToArgs(Coll, joinKey, rest) {
-  const join = getJoins(Coll)?.[joinKey];
+function joinToArgs(Coll, joinKey, getJoins, rest) {
+  const join = getJoins?.(Coll)?.[joinKey];
 
   if (!join) {
     const protocol = getProtocol();

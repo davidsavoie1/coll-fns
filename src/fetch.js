@@ -5,7 +5,7 @@ import {
   dispatchFields,
   normalizeFields,
 } from "./fields";
-import { getJoins } from "./join";
+import { useJoinContext } from "./join";
 import {
   getPropValue,
   includesSome,
@@ -24,6 +24,7 @@ import { getArrayJoinSelector } from "./selectors";
  * @property {number} [limit] - Max number of documents to return.
  * @property {number} [skip] - Number of documents to skip.
  * @property {Function} [transform] - Document transform function. If omitted, protocol getTransform(Coll) is used.
+ * @property {Object} [ctx] - Join context used for the complete fetch tree.
  *
  * @typedef {Object} JoinDef
  * @property {*} Coll - Target collection of the join.
@@ -42,7 +43,7 @@ import { getArrayJoinSelector } from "./selectors";
 /**
  * Retrieve documents of a collection, with optional joined subdocuments.
  * - Fields accept nested objects; dot-notation is normalized internally.
- * - Joins are pre-registered via join(Coll, joinDefinitions). Join usage is controlled through '+' in fields.
+ * - Joins come from the global dictionary or an optional local context. Join usage is controlled through fields.
  * - Works with both sync and async protocols.
  *
  * @template TColl
@@ -64,15 +65,21 @@ import { getArrayJoinSelector } from "./selectors";
 export function fetchList(Coll, selector = {}, options = {}) {
   const { count, findList, getTransform } = getProtocol();
 
-  const joins = getJoins(Coll);
-
   const collTransform = getTransform(Coll);
-  const { fields, transform = collTransform, ...restOptions } = options;
+  const { ctx, fields, transform = collTransform, ...restOptions } = options;
+
+  const { getJoinPrefix, getJoins } = useJoinContext(ctx);
+
+  const joins = getJoins(Coll) || {};
 
   const enhance = (doc) => (isFunc(transform) ? transform(doc) : doc);
 
   // Partition field spec into own (base collection) and join fields ('+')
-  const { _: ownFields, "+": joinFields = {} } = dispatchFields(fields, joins);
+  const { _: ownFields, "+": joinFields = {} } = dispatchFields(
+    fields,
+    joins,
+    getJoinPrefix()
+  );
   const usedJoinKeys = Object.keys(joinFields);
 
   // If no joins or fields are not objects, perform a straight fetch
@@ -137,13 +144,14 @@ export function fetchList(Coll, selector = {}, options = {}) {
                 const stopRecursion = isRecursive && !recursiveCount;
 
                 const subJoinFields = isRecursive
-                  ? decrementRecursiveField(_key, fields)
+                  ? decrementRecursiveField(_key, fields, getJoinPrefix())
                   : joinFields[_key];
 
                 // Determine whether we need to include toProp explicitly in subFields
                 const { _: own } = dispatchFields(
                   subJoinFields,
-                  getJoins(joinColl) || {}
+                  getJoins(joinColl) || {},
+                  getJoinPrefix()
                 );
 
                 const allOwnIncluded = !own || Object.keys(own).length <= 0;
@@ -158,6 +166,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
                 const subOptions = {
                   ...options,
                   ...joinRest,
+                  ctx,
                   fields: normalizeFields(subFields),
                   limit: undefined,
                   transform: isRecursive ? transform : undefined,
@@ -253,6 +262,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
               const subSelector = on;
               return createJoinFetcher({
                 Coll,
+                ctx,
                 join,
                 fields: joinFields[_key],
                 subSelector,
@@ -279,6 +289,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
                           _doc,
                           createJoinFetcher({
                             Coll,
+                            ctx,
                             join,
                             fields: joinFields[_key],
                             subSelector: isFunc(on) ? on(doc) : on,
@@ -387,6 +398,7 @@ function pluckIds(arr) {
  */
 function createJoinFetcher({
   Coll,
+  ctx,
   join: {
     _key,
     Coll: joinColl,
@@ -403,6 +415,8 @@ function createJoinFetcher({
 }) {
   const { count } = getProtocol();
 
+  const { getJoinPrefix } = useJoinContext(ctx);
+
   const isRecursive = joinColl === Coll;
 
   return then(
@@ -413,13 +427,15 @@ function createJoinFetcher({
       const stopRecursion = isRecursive && (!fields || !recursiveCount);
 
       const joinFields = isRecursive
-        ? decrementRecursiveField(_key, parentFields)
+        ? decrementRecursiveField(_key, parentFields, getJoinPrefix())
         : fields;
 
       /** @type {FetchOptions} */
       const subOptions = {
         ...options,
         ...joinRest,
+        /* Use the same join context recursively */
+        ctx,
         fields: normalizeFields(joinFields),
         limit: single ? 1 : joinLimit || undefined,
       };

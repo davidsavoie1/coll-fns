@@ -28,6 +28,7 @@ Stop repeating business logic all over your code base. Define hooks on collectio
     - [Join additional options](#join-additional-options)
     - [`postFetch`](#postfetch)
     - [`getJoins`](#getjoins)
+    - [`createJoinContext(options)`](#createjoincontextoptions)
   - [`fetchList(Coll, selector, options)`](#fetchlistcoll-selector-options)
     - [`fields` option and joins](#fields-option-and-joins)
       - [Examples](#examples)
@@ -414,6 +415,14 @@ join(
 
 Collections can define **as many joins as needed** without impacting performance. They will be used only when explicitly fetched. They can be **declared in different places** (as long as join names don't collide).
 
+Calling `join(Coll, null)` disables all joins on a collection. A falsy entry can also disable a single join, which is especially useful in a local join context:
+
+```js
+join(Posts, {
+  legacyAuthor: null,
+});
+```
+
 In the context of Meteor, joins could (should?) be **defined in shared client and server code**, but some might only ever be used in one environement or the other. They could also define a set of common joins, but add others in environment specific code.
 
 By default, joins link one document from the parent collection to multiple ones from the child collection. In the case of a **one-to-one relationship**, the `single` property should be set to true.
@@ -482,6 +491,8 @@ join(Resources, {
 ### Dot-notation joins
 
 Parent and joined document properties may use dot notation to reference nested fields.
+
+Dot notation describes the field path. Wrapping that path in an array still indicates that the resolved property contains multiple values.
 
 ```js
 import { join } from "coll-fns";
@@ -638,12 +649,95 @@ join(Resources, {
 
 Use `getJoins(Coll)` to retrieve the complete dictionary of the collection's joins.
 
+### `createJoinContext(options)`
+
+Joins are normally retrieved from the global dictionary populated by `join()`. A reusable local context can be created to override or disable some of them without modifying their global definitions.
+
+```js
+import { createJoinContext, fetchList } from "coll-fns";
+import { Permissions, Resources } from "/collections";
+
+const ctx = createJoinContext({ prefix: "+" }).join(Resources, {
+  permissions: {
+    Coll: Permissions,
+    on: [
+      "_id",
+      "resourceId",
+      { userId, tenantId },
+    ],
+  },
+});
+
+const resources = await fetchList(Resources, {}, {
+  ctx,
+  fields: {
+    name: 1,
+    "+": {
+      permissions: 1,
+    },
+  },
+});
+```
+
+Contexts use global joins by default. Local definitions are merged over them by collection and join key. This means a deeply nested join can be overridden without redefining the joins used to reach its collection.
+
+```js
+/* Keep all global joins, but override `Users.permissions`
+ * anywhere Users is reached in this fetch/publication tree. */
+const ctx = createJoinContext().join(Users, {
+  permissions: {
+    Coll: Permissions,
+    on: ["_id", "userId", { tenantId }],
+  },
+});
+```
+
+Pass a falsy definition to disable one global join, or falsy joins to disable all joins of a collection:
+
+```js
+const ctx = createJoinContext()
+  /* Disable one join */
+  .join(Users, { privateNotes: null })
+  /* Disable every join on AuditLogs */
+  .join(AuditLogs, null);
+```
+
+To create a context that does not fall back to any global join:
+
+```js
+const ctx = createJoinContext({ defaultToGlobal: false });
+```
+
+The join prefix can also be configured locally. It applies to the complete fetch or publication tree and does not modify the global prefix:
+
+```js
+const ctx = createJoinContext({ prefix: "+" });
+
+/* Equivalent after creation, and chainable */
+ctx.setJoinPrefix("+");
+```
+
+A join context can be composed once through chainable calls and reused by multiple fetches and publications.
+
+`fetchList()` and `publish()` only require a context to expose a synchronous `getJoins(Coll)` method. `getJoinPrefix()` is optional, so custom contexts can use arbitrary join lookup logic:
+
+```js
+const ctx = {
+  getJoins(Coll) {
+    return joinDirectoriesByTenant[tenantId]?.get(Coll);
+  },
+};
+```
+
+The context passed at the root is used for every nested join. Children and join definitions cannot replace it for only one branch.
+
 ## `fetchList(Coll, selector, options)`
 
 Fetch documents with the ability to **use collection joins**.
 
 **Options:**
 
+- `ctx`: Reusable local join context for the complete fetch tree
 - `fields`: Field projection object
 - `limit`: Maximum number of documents
 - `skip`: Number of documents to skip
@@ -863,7 +957,7 @@ fetchList(
 
 This option could also be useful if a document can have some denormalized data with the same property name as the join. The denormalized values or the joined document would then be returned based on the use of the prefix.
 
-If, for some reason, you need to retrieve the prefix, you can do so with `getJoinPrefix(Coll)`.
+If, for some reason, you need to retrieve the prefix, you can do so with `getJoinPrefix()`.
 
 ### Nested Joins
 
@@ -1645,6 +1739,7 @@ Create a reactive publication tree (Meteor-style) with support for:
 - explicit child observers (`{ Coll, on, ... }`)
 - join shorthand children (`{ join: "joinKey", ... }`)
 - implicit join children derived from parent requested join fields
+- a local join context (`ctx`) shared by the complete publication tree
 
 `publish` internally uses protocol methods:
 
@@ -1659,6 +1754,25 @@ As with normal joins, child `on` values can be:
 - join-array selectors: `[from, to, toSelector?]`
 
 Refer to the [`join()`](#joincoll-joindefinitions) section for more details.
+
+The same context accepted by `fetchList()` can be passed in publication options. It resolves joins and the join prefix at every level of the tree:
+
+```js
+return publish(this, Posts, selector, {
+  ctx,
+  fields: {
+    "+": {
+      author: {
+        "+": {
+          permissions: 1,
+        },
+      },
+    },
+  },
+});
+```
+
+The root context always applies to every child observer.
 
 ```js
 import { Meteor } from "meteor/meteor";

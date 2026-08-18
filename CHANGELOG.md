@@ -2,6 +2,7 @@
 
 - Allow dot-notation keys in `publish` `deps`
 - Allow dot notation key joins
+- Allow passing a local join context to override global joins in `fetch` and `publish`
 
 ---
 
