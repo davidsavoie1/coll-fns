@@ -309,7 +309,7 @@ export function publish(
   Coll: any,
   selector: PublishSelector,
   options?: PublishOptions
-): MaybePromise<{ stop: () => void }>;
+): Promise<{ stop: () => void }>;
 
 export function setProtocol<TColl = any, TDoc = AnyObject>(
   methods?: Partial<Protocol<TColl, TDoc>>

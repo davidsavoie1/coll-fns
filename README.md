@@ -1760,7 +1760,7 @@ Refer to the [`join()`](#joincoll-joindefinitions) section for more details.
 The same context accepted by `fetchList()` can be passed in publication options. It resolves joins and the join prefix at every level of the tree:
 
 ```js
-return publish(this, Posts, selector, {
+await publish(this, Posts, selector, {
   ctx,
   fields: {
     "+": {
@@ -1800,8 +1800,8 @@ join(Comments, {
   author: { Coll: Users, on: ["authorId", "_id"], single: true },
 });
 
-Meteor.publish("posts.tree", function postsTree() {
-  return publish(
+Meteor.publish("posts.tree", async function postsTree() {
+  await publish(
     this,
     Posts,
     { status: "published" },
@@ -1892,8 +1892,8 @@ Practical guidance:
 Example:
 
 ```js
-Meteor.publish("posts.tree", function postsTree() {
-  return publish(
+Meteor.publish("posts.tree", async function postsTree() {
+  await publish(
     this,
     Posts,
     { status: "published" },
@@ -1918,6 +1918,16 @@ Meteor.publish("posts.tree", function postsTree() {
 argument should be the publication session/context (`this`) received in
 `Meteor.publish(name, function () { ... })`.
 
+Because `coll-fns` uses Meteor's low-level `added`/`changed`/`removed` publication API, await its initialization without returning its resolved handle to Meteor. `publish()` calls `this.ready()` itself and registers its cleanup through `this.onStop()`:
+
+```js
+Meteor.publish("posts.tree", async function () {
+  await publish(this, Posts, { status: "published" });
+});
+```
+
+Avoid `return publish(...)` and `return await publish(...)`: the promise resolves to an internal `{ stop }` handle, not to a cursor or an array of cursors as expected from a cursor-return publication. Awaiting also keeps initialization errors in the asynchronous publication handler.
+
 Minimal expected shape of `publication`:
 
 - `ready()` (required)
@@ -1930,9 +1940,9 @@ Minimal expected shape of `publication`:
 Example:
 
 ```js
-Meteor.publish("posts.tree", function () {
+Meteor.publish("posts.tree", async function () {
   // `this` is the publication context/session.
-  return publish(this, Posts, { status: "published" });
+  await publish(this, Posts, { status: "published" });
 });
 ```
 
@@ -1967,8 +1977,8 @@ For function selectors and function deps, the helper passes:
 This is useful when deep children must depend on context from higher levels.
 
 ```js
-Meteor.publish("resources.tasks.actions", function () {
-  return publish(
+Meteor.publish("resources.tasks.actions", async function () {
+  await publish(
     this,
     Resources,
     { archived: false },
@@ -2044,10 +2054,10 @@ publish(this, Documents, selector, {
 An object mapping replaces its source field with one or more derived fields (1:n). Each output function receives the current value of the same source field:
 
 ```js
-Meteor.publish("documents.private", function () {
+Meteor.publish("documents.private", async function () {
   const { userId } = this;
 
-  return publish(this, Documents, selector, {
+  await publish(this, Documents, selector, {
     fields: {
       title: 1,
       [`secretValuesByUserId.${userId}`]: 1,

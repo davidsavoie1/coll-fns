@@ -135,6 +135,8 @@ const DEBUG = {
  * - join shorthand (`{ join: "joinKey", ... }`) resolved from `join()` definitions
  *
  * Join children can also be derived implicitly from parent `fields`.
+ * In a Meteor low-level publication, call this as `await publish(...)` from an
+ * async handler without returning the resolved `{ stop }` handle to Meteor.
  *
  * @param {PublicationContext} publication Publication callbacks context.
  * @param {*} Coll Root collection.
