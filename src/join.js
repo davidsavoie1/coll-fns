@@ -29,11 +29,18 @@ let joinsDictionary = new Map();
 let joinPrefix = null;
 
 /**
- * @typedef {[*] | [string, string] | [string, string, Object]} JoinArrayOn
+ * @typedef {string | [string]} JoinArrayProp
+ * A dot-notation field path, optionally wrapped to mark it as array-valued.
+ */
+
+/**
+ * @typedef {[JoinArrayProp, JoinArrayProp] | [JoinArrayProp, JoinArrayProp, Object]} JoinArrayOn
  * Array form describing relation:
  * - [fromProp, toProp] or [fromProp, toProp, toSelector]
- *   fromProp: field on parent doc (string or ['field'] to denote array-valued)
- *   toProp:   field on joined doc  (string or ['field'] to denote array-valued)
+ *   fromProp: dot-notation field path on the parent document
+ *     (string or ['path'] to denote an array-valued path)
+ *   toProp: dot-notation field path on the joined document
+ *     (string or ['path'] to denote an array-valued path)
  *   toSelector: optional additional selector for joined docs
  */
 

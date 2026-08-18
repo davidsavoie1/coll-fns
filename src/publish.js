@@ -10,11 +10,11 @@ import {
   createRegistry,
   deriveArgsByQueryKey,
   interpretFieldDeps,
-  interpretSelector,
+  interpretJoinSelector,
   KEY_SEPARATOR,
   normalizeArgs,
-  VOID_SELECTOR,
 } from "./publishHelpers";
+import { VOID_SELECTOR } from "./selectors";
 
 const MAX_CONCURRENT = 10; // Maximum number of concurrent observer creation processed
 
@@ -250,7 +250,7 @@ async function runPublication(publication, args = {}) {
 
     /* Selector might be an object, a function or an array.
      * Interpret it first so that an actual object selector remains. */
-    const actSelector = await interpretSelector(on, ancestors);
+    const actSelector = await interpretJoinSelector(on, ancestors);
 
     /* Simplified key for debugging purposes */
     const debugKey = createDebugKey(Coll, actSelector);

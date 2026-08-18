@@ -60,7 +60,9 @@ export interface Protocol<TColl = any, TDoc = AnyObject> {
   ) => MaybePromise<number>;
 }
 
+/** A dot-notation field path, optionally wrapped to mark it as array-valued. */
 export type JoinArrayProp = string | [string];
+/** Array join relation: [parentPath, joinedPath, additionalSelector?]. */
 export type JoinArrayOn =
   | [JoinArrayProp, JoinArrayProp]
   | [JoinArrayProp, JoinArrayProp, AnyObject];

@@ -20,6 +20,7 @@ Stop repeating business logic all over your code base. Define hooks on collectio
   - [`join(Coll, joinDefinitions)`](#joincoll-joindefinitions)
     - [Simple array join](#simple-array-join)
     - [Sub-array joins](#sub-array-joins)
+    - [Dot-notation joins](#dot-notation-joins)
     - [Filtered array-joins](#filtered-array-joins)
     - [Object joins](#object-joins)
     - [Function joins](#function-joins)
@@ -474,6 +475,30 @@ join(Resources, {
   actions: {
     Coll: Actions,
     on: [["actionIds"], "_id"],
+  },
+});
+```
+
+### Dot-notation joins
+
+Parent and joined document properties may use dot notation to reference nested fields.
+
+```js
+import { join } from "coll-fns";
+import { Actions, Posts, Resources, Users } from "/collections";
+
+join(Posts, {
+  author: {
+    Coll: Users,
+    on: ["subDoc.authorId", "_id"],
+    single: true,
+  },
+});
+
+join(Actions, {
+  resources: {
+    Coll: Resources,
+    on: ["_id", ["nestedActions._id"]],
   },
 });
 ```

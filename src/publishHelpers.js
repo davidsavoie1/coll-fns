@@ -1,12 +1,10 @@
 import { dispatchFields } from "./fields";
 import { getJoins } from "./join";
 import { getProtocol } from "./protocol";
+import { getArrayJoinSelector, VOID_SELECTOR } from "./selectors";
 import { hasOwn, isArr, isFunc, isObj } from "./util";
 
 export const KEY_SEPARATOR = "|";
-
-/* Selector that always matches no document (_id is always required). */
-export const VOID_SELECTOR = { _id: { $exists: false } };
 
 /* Create an enhanced Map that can manipulate nested Set values. */
 export function createRegistry() {
@@ -97,7 +95,7 @@ export async function deriveArgsByQueryKey(ancestors, children) {
         ...options
       } = normalizeArgs(childArgs);
 
-      const actSelector = await interpretSelector(on, ancestors);
+      const actSelector = await interpretJoinSelector(on, ancestors);
 
       /* Create a key from the cursor arguments so it can be reused. */
       const queryKey = createQueryKey(Coll, actSelector, options);
@@ -261,28 +259,29 @@ function normalizeDeps(deps) {
   return false;
 }
 
-/* Resolve supported selector inputs (object, function, join-array) into an object selector. */
-export async function interpretSelector(selector, ancestors = []) {
-  if (!selector) return VOID_SELECTOR;
+/* Resolve supported `on` inputs (object, function, join-array) into an object selector. */
+export async function interpretJoinSelector(on, ancestors = []) {
+  if (!on) return VOID_SELECTOR;
 
-  /* Function selector `(parent, ...ancestors) => selector` */
-  if (isFunc(selector)) {
-    const computedSelector = await selector(...ancestors);
+  /* Function `(parent, ...ancestors) => selector` */
+  if (isFunc(on)) {
+    const computedSelector = await on(...ancestors);
     if (computedSelector) return computedSelector;
 
     // eslint-disable-next-line no-console
     console.warn(
-      "[`publish`]: `selector` function should produce a valid selector object"
+      "[`publish`]: `on` function should produce a valid selector object"
     );
 
     return VOID_SELECTOR;
   }
 
-  /* `selector` can be an array where:
-   * - first element is the join prop from the parent document
-   * - second element is the join prop to the child documents
+  /* `on` can be an array where:
+   * - first element is the dot-notation join path from the parent document
+   * - second element is the dot-notation join path to the child documents
+   * - wrapping either path in an array denotes an array-valued path
    * - third element is an additional selector to consider */
-  if (isArr(selector)) {
+  if (isArr(on)) {
     const [parent] = ancestors || [];
 
     /* Array selector needs a parent. */
@@ -294,56 +293,11 @@ export async function interpretSelector(selector, ancestors = []) {
       return VOID_SELECTOR;
     }
 
-    const [from, to, toSelector] = selector;
-
-    /* If first element is an array as in `[["propToChildrenVals"], "childProp"]`,
-     * `childrenPropVals` on parent document contains a list
-     * of values associated with the joined `childProp`. */
-    const fromArray = isArr(from);
-
-    /* If second element is an array as in `["parentProp", ["propToParentVals"]]`,
-     * `propToParentVals` on children documents contain lists of values
-     * associated with the joined `parentProp`. */
-    const toArray = isArr(to);
-
-    let joinSelector;
-
-    /* ["propToChildVal", "childProp"] */
-    if (!fromArray && !toArray) {
-      const parentValue = parent[from];
-      if (parentValue === undefined) return VOID_SELECTOR;
-      joinSelector = { [to]: parentValue };
-    }
-
-    /* [["propToChildrenVals"], "childProp"] */
-    if (fromArray && !toArray) {
-      const parentValues = parent[from[0]];
-      if (parentValues === undefined) return VOID_SELECTOR;
-      joinSelector = { [to]: { $in: parentValues || [] } };
-    }
-
-    /* ["parentProp", ["propToParentVals"]] */
-    if (!fromArray && toArray) {
-      const parentValue = parent[from];
-      if (parentValue === undefined) return VOID_SELECTOR;
-      joinSelector = { [to[0]]: { $elemMatch: { $eq: parentValue } } };
-    }
-
-    /* [["propToChildrenVals"], ["propToParentVals"]] */
-    if (fromArray && toArray) {
-      const parentValues = parent[from[0]];
-      if (parentValues === undefined) return VOID_SELECTOR;
-      joinSelector = { [to[0]]: { $elemMatch: { $in: parentValues || [] } } };
-    }
-
-    /* Unlikely because all four cases have been considered... */
-    if (!joinSelector) return VOID_SELECTOR;
-
-    return !toSelector ? joinSelector : { ...toSelector, ...joinSelector };
+    return getArrayJoinSelector(on, [parent]);
   }
 
   /* Static plain object selector */
-  if (typeof selector === "object") return selector;
+  if (typeof on === "object") return on;
 
   /* Default to null selector */
   return VOID_SELECTOR;

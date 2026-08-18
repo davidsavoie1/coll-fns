@@ -1,6 +1,7 @@
 # NEXT
 
 - Allow dot-notation keys in `publish` `deps`
+- Allow dot notation key joins
 
 ---
 

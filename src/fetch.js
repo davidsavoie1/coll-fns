@@ -15,6 +15,7 @@ import {
   typeOf,
   uniqueBy,
 } from "./util";
+import { getArrayJoinSelector } from "./selectors";
 
 /**
  * @typedef {Object} FetchOptions
@@ -27,7 +28,8 @@ import {
  * @typedef {Object} JoinDef
  * @property {*} Coll - Target collection of the join.
  * @property {[*]|Object|Function} on - How to relate parent docs to target docs:
- *   - Array form: [fromProp, toProp, toSelector?]
+ *   - Array form: [fromProp, toProp, toSelector?]. Props accept dot-notation
+ *     paths and may be wrapped in an array to denote array-valued paths.
  *   - Object form: static selector for target docs
  *   - Function form: (doc) => selector, computed per parent doc
  * @property {Object} [deps] - Parent fields required to compute function joins.
@@ -104,7 +106,7 @@ export function fetchList(Coll, selector = {}, options = {}) {
         function: fnJoins = [],
       } = partitionJoinsByType(usedJoinKeys, joins);
 
-      // Process array-type joins: [fromProp, toProp, toSelector?]
+      // Process array-type joins. Props support dot-notation paths and array cardinality.
       return then(
         arrJoins.reduce((_docs, join) => {
           const {
@@ -118,19 +120,12 @@ export function fetchList(Coll, selector = {}, options = {}) {
           } = join;
 
           return then(_docs, (readyDocs) => {
-            const [fromProp, toProp, toSelector = {}] = on;
-            const fromArray = isArr(fromProp);
-            const propList = fromArray
-              ? readyDocs.flatMap((doc) => doc[fromProp[0]])
-              : readyDocs.map((doc) => doc[fromProp]);
+            const [fromProp, toProp] = on;
 
+            const fromArray = isArr(fromProp);
             const toArray = isArr(toProp);
-            const subSelector = toArray
-              ? {
-                  ...toSelector,
-                  [toProp[0]]: { $elemMatch: { $in: propList } },
-                }
-              : { ...toSelector, [toProp]: { $in: propList } };
+
+            const subSelector = getArrayJoinSelector(on, readyDocs);
 
             // Support recursive joins by checking for additional depth and data existence
             const isRecursive = joinColl === Coll && joinFields[_key] > 1;
@@ -194,31 +189,47 @@ export function fetchList(Coll, selector = {}, options = {}) {
                         }, {});
 
                     return readyDocs.map((doc) => {
-                      // eslint-disable-next-line no-useless-assignment
                       let joinedDocs = [];
 
-                      if (toArray) {
-                        // toProp is an array on joined docs
-                        joinedDocs = allJoinedDocs.filter((joinedDoc) => {
-                          const toList = joinedDoc[toProp[0]] || [];
-                          if (!fromArray) return toList.includes(doc[fromProp]);
+                      /* ["propToChildVal", "childProp"] */
+                      if (!fromArray && !toArray) {
+                        const fromValue = getPropValue(fromProp, doc);
+                        joinedDocs = indexedByToProp[fromValue] || [];
+                      }
 
-                          const fromList = doc[fromProp[0]] || [];
-                          return includesSome(toList, fromList);
-                        });
-                      } else if (fromArray) {
-                        // fromProp is array on parent docs
-                        const fromValues = doc[fromProp[0]] || [];
+                      /* [["propToChildrenVals"], "childProp"] */
+                      if (fromArray && !toArray) {
+                        const fromValues = getPropValue(fromProp[0], doc) || [];
                         joinedDocs = uniqueBy(
                           "_id",
                           fromValues.flatMap(
                             (fromValue) => indexedByToProp[fromValue] || []
                           )
                         );
-                      } else {
-                        // Both scalar
-                        const fromValue = doc[fromProp];
-                        joinedDocs = indexedByToProp[fromValue] || [];
+                      }
+
+                      /* ["parentProp", ["propToParentVals"]] */
+                      if (!fromArray && toArray) {
+                        const fromValue = getPropValue(fromProp, doc);
+
+                        joinedDocs = allJoinedDocs.filter((joinedDoc) => {
+                          const toList =
+                            getPropValue(toProp[0], joinedDoc) || [];
+
+                          return toList.includes(fromValue);
+                        });
+                      }
+
+                      /* [["propToChildrenVals"], ["propToParentVals"]] */
+                      if (fromArray && toArray) {
+                        const fromList = getPropValue(fromProp[0], doc) || [];
+
+                        joinedDocs = allJoinedDocs.filter((joinedDoc) => {
+                          const toList =
+                            getPropValue(toProp[0], joinedDoc) || [];
+
+                          return includesSome(toList, fromList);
+                        });
                       }
 
                       const raw = single ? joinedDocs[0] : joinedDocs;
