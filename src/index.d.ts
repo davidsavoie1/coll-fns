@@ -200,6 +200,12 @@ export type PublishDeps<TParent = AnyObject> =
     >)
   | undefined;
 
+export type PublishFieldMapping =
+  | ((value: any) => any)
+  | Record<string, (value: any) => any>;
+
+export type PublishFieldMappings = Record<string, PublishFieldMapping>;
+
 export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
   Coll?: any;
   join?: string;
@@ -207,6 +213,8 @@ export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
   /** Backward-compatible alias for `on`. */
   selector?: PublishSelector<TParent>;
   fields?: FieldSpec;
+  /** Stateless field mappings applied immediately before publication. */
+  mappings?: PublishFieldMappings;
   children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
   deps?: PublishDeps<TParent>;
   awaited?: boolean;
@@ -216,6 +224,8 @@ export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
 export interface PublishOptions<TParent = AnyObject> extends AnyObject {
   ctx?: JoinContext;
   fields?: FieldSpec;
+  /** Stateless field mappings applied immediately before publication. */
+  mappings?: PublishFieldMappings;
   children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
   deps?: PublishDeps<TParent>;
   debug?: boolean | string[] | Record<string, boolean>;

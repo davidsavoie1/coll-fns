@@ -64,6 +64,7 @@ Stop repeating business logic all over your code base. Define hooks on collectio
   - [How child declarations work](#how-child-declarations-work)
   - [Ancestors chain](#ancestors-chain)
   - [How `deps` works](#how-deps-works)
+  - [Mapping published fields](#mapping-published-fields)
   - [Debugging](#debugging)
   - [Built-in optimizations](#built-in-optimizations)
   - [Using `publish` outside Meteor](#using-publish-outside-meteor)
@@ -1740,6 +1741,7 @@ Create a reactive publication tree (Meteor-style) with support for:
 - join shorthand children (`{ join: "joinKey", ... }`)
 - implicit join children derived from parent requested join fields
 - a local join context (`ctx`) shared by the complete publication tree
+- stateless field mappings applied before documents are sent to the client
 
 `publish` internally uses protocol methods:
 
@@ -1945,7 +1947,7 @@ Falsy entries are ignored, which allows short-circuit declarations like
 Object entries can be defined with either:
 
 - explicit child args:
-  - `{ Coll, on, fields?, deps?, awaited?, children?, ...cursorOptions }`
+  - `{ Coll, on, fields?, mappings?, deps?, awaited?, children?, ...cursorOptions }`
 - join shorthand:
   - `{ join: "joinKey", ...overrides }`
 
@@ -2025,6 +2027,54 @@ For array selectors, implicit deps are auto-derived from the `from` key.
 
 The use of dot-notation deps is useful to limit nested fields to fetch, while staying consistent with the root level changed fields behaviour.
 
+## Mapping published fields
+
+The `mappings` option can reshape individual fields immediately before they are emitted to the client. Mappings are applied to both `added` and `changed` events without retaining copies of published documents.
+
+Fields without a mapping are published unchanged. A mapping function transforms one field while preserving its name (1:1):
+
+```js
+publish(this, Documents, selector, {
+  mappings: {
+    title: (value) => value.trim(),
+  },
+});
+```
+
+An object mapping replaces its source field with one or more derived fields (1:n). Each output function receives the current value of the same source field:
+
+```js
+Meteor.publish("documents.private", function () {
+  const { userId } = this;
+
+  return publish(this, Documents, selector, {
+    fields: {
+      title: 1,
+      [`secretValuesByUserId.${userId}`]: 1,
+    },
+    mappings: {
+      secretValuesByUserId: {
+        secretValues: (values) => values?.[userId],
+      },
+    },
+  });
+});
+```
+
+The client receives `secretValues`, but never receives the source field `secretValuesByUserId`. An empty object mapping omits a source field without producing a replacement (1:0):
+
+```js
+mappings: {
+  internalMetadata: {},
+}
+```
+
+Mappings are synchronous and stateless. A mapped result can depend only on the current value of its source field; deriving a value from multiple document fields would not be reliable for incremental `changed` events. When a source is removed, its mapping receives `undefined`, allowing the output fields to be removed from the client as well.
+
+Mapping definitions are validated when their observer is created. Producing the same output key from multiple mappings emits a warning. Avoid mapping to a name also published by an unmapped field, since the values would conflict.
+
+Mappings affect only the fields sent through the publication callbacks. Joins, `deps`, selectors and child observers continue to use the original observed documents. Distinct mapping objects also receive distinct observer reuse keys so an observer cannot be reused with another representation.
+
 ## Debugging
 
 `publish()` supports lightweight lifecycle debugging with:
@@ -2101,6 +2151,7 @@ Protocol methods handle database reactivity.
 - Deep/dynamic trees can still be expensive if selectors are broad and highly volatile.
 - If `deps` are too broad (or omitted for dynamic selectors), invalidations may be frequent.
 - For best results, keep parent selectors selective and declare precise `deps`.
+- Multiple observers can contribute fields to the same `collection/_id`. If one stops following the document while another remains, fields contributed only by the first observer are not currently retracted independently. This limitation predates `mappings`; use compatible projections and mappings for overlapping observers.
 
 # License
 

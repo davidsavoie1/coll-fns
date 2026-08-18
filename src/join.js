@@ -1,4 +1,4 @@
-import { isFunc, typeOf, warn } from "./util";
+import { isFunc, map, typeOf, warn } from "./util";
 
 const PREFIX = Symbol("PREFIX");
 
@@ -112,37 +112,35 @@ export function join(Collection, joins, dict = getGlobalJoinsDict()) {
 
   const existingJoins = getJoins(Collection, dict);
 
-  const normalizedJoins = Object.fromEntries(
-    Object.entries(joins).map(([key, join]) => {
-      if (!join) return [key, null];
+  const normalizedJoins = map(([key, join]) => {
+    if (!join) return [key, null];
 
-      const { Coll, on, fields, deps = fields } = join;
-      if (!Coll) {
-        throw new Error(`Collection 'Coll' for '${key}' join is required.`);
-      }
+    const { Coll, on, fields, deps = fields } = join;
+    if (!Coll) {
+      throw new Error(`Collection 'Coll' for '${key}' join is required.`);
+    }
 
-      if (!on) {
-        throw new Error(`Join '${key}' has no 'on' condition specified.`);
-      }
+    if (!on) {
+      throw new Error(`Join '${key}' has no 'on' condition specified.`);
+    }
 
-      const joinType = typeOf(on);
-      if (!KNOWN_TYPES.includes(joinType)) {
-        throw new Error(
-          `Join '${key}' has an unrecognized 'on' condition type of '${joinType}'. Should be one of '${knownTypesCaption}'.`
-        );
-      }
+    const joinType = typeOf(on);
+    if (!KNOWN_TYPES.includes(joinType)) {
+      throw new Error(
+        `Join '${key}' has an unrecognized 'on' condition type of '${joinType}'. Should be one of '${knownTypesCaption}'.`
+      );
+    }
 
-      // When on is a function, the join likely depends on keys from the parent doc.
-      // Encourage declaring the base deps required so callers don't forget them.
-      if (isFunc(on) && !deps) {
-        warn(
-          `Join '${key}' is defined with a function 'on', but no 'deps' are explicitly specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`
-        );
-      }
+    // When on is a function, the join likely depends on keys from the parent doc.
+    // Encourage declaring the base deps required so callers don't forget them.
+    if (isFunc(on) && !deps) {
+      warn(
+        `Join '${key}' is defined with a function 'on', but no 'deps' are explicitly specified. This could lead to failed joins if the keys necessary for the join are not specified at query time.`
+      );
+    }
 
-      return [key, join];
-    })
-  );
+    return [key, join];
+  }, joins);
 
   /* Merge new join defs with existing ones on this collection.
    * `null` joins will remove existing ones. */

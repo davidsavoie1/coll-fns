@@ -2,7 +2,7 @@ import { dispatchFields } from "./fields";
 import { useJoinContext } from "./join";
 import { getProtocol } from "./protocol";
 import { getArrayJoinSelector, VOID_SELECTOR } from "./selectors";
-import { hasOwn, isArr, isFunc, isObj } from "./util";
+import { hasOwn, isArr, isFunc, isObj, map } from "./util";
 
 export const KEY_SEPARATOR = "|";
 
@@ -64,14 +64,29 @@ export function createDebugKey(Coll, selector = {}) {
   );
 }
 
-/* Stringify arguments to collection cursor to create a unique identifier */
+const mappingIds = new WeakMap();
+let nextMappingId = 0;
+
+function getMappingsKey(mappings) {
+  if (!mappings) return undefined;
+
+  if (!mappingIds.has(mappings)) {
+    mappingIds.set(mappings, ++nextMappingId);
+  }
+
+  return `mappings:${mappingIds.get(mappings)}`;
+}
+
+/* Stringify observer arguments to create a unique identifier.
+ * Mapping objects use reference identity because their functions cannot be
+ * serialized reliably. Observers with distinct mappings must not be reused. */
 export function createQueryKey(Coll, selector = {}, options = {}) {
   const protocol = getProtocol();
-  const { fields, limit, skip, sort } = options;
+  const { fields, limit, mappings, skip, sort } = options;
 
   return (
     createDebugKey(Coll, selector) +
-    [fields, sort, limit, skip]
+    [fields, sort, limit, skip, getMappingsKey(mappings)]
       .filter((x) => x !== undefined)
       .map((x) => {
         if (isObj(x)) return protocol.stringify(x);
@@ -464,4 +479,79 @@ function deriveParentFieldDeps({ deps, selector, on = selector }) {
   });
 
   return Array.from(parentFieldDeps);
+}
+
+/* Validate mappings shape and statically warn on conflicting output keys. */
+export function validateMappings(mappings) {
+  if (!mappings) return;
+
+  if (!isObj(mappings)) {
+    throw new TypeError("Mappings must be an object.");
+  }
+
+  /* Place keys in a set and check if it already exists before adding. */
+  const keys = new Set();
+
+  function addKey(key) {
+    if (keys.has(key)) {
+      // eslint-disable-next-line no-console
+      console.warn(`A mapping introduces conflicting key '${key}'`);
+    }
+
+    keys.add(key);
+  }
+
+  for (const [key, mapping] of Object.entries(mappings)) {
+    if (isFunc(mapping)) {
+      addKey(key);
+    } else if (isObj(mapping)) {
+      Object.entries(mapping).forEach(([k, fn]) => {
+        if (!isFunc(fn)) {
+          throw new TypeError(`Mapping '${key}.${k}' must be a function.`);
+        }
+        addKey(k);
+      });
+    } else {
+      throw new TypeError(
+        `Mapping '${key}' must be a function or a map of functions.`
+      );
+    }
+  }
+}
+
+/* Apply stateless mappings to an observed fields object before DDP emission.
+ * A function transforms a field in place (`{ key: (v) => v' }`). An object
+ * replaces the source with fields derived only from its current value
+ * (`{ key: { newKeyA: (v) => a, newKeyB: (v) => b } }`). An empty object
+ * removes the source. Unmapped fields pass through unchanged. */
+export function mapFields(mappings, fields) {
+  if (!mappings) return fields;
+
+  return Object.keys(mappings)
+    .sort()
+    .reduce((acc, key) => {
+      if (!hasOwn(fields, key)) return acc;
+
+      const mapping = mappings[key];
+      const value = fields[key];
+
+      const { [key]: omitted, ...remainingFields } = acc;
+
+      /* Key mapping can be a function that transforms only the targeted field */
+      if (isFunc(mapping)) {
+        return { ...remainingFields, [key]: mapping(value) };
+      }
+
+      if (isObj(mapping)) {
+        /* Can also be an object of functions by field to publish */
+        const mappedFields = map((fn) => fn(value), mapping);
+
+        return { ...remainingFields, ...mappedFields };
+      }
+
+      /* Should not happen. Should be validated earlier... */
+      throw new TypeError(
+        `Mapping '${key}' should be a function or a map of functions.`
+      );
+    }, fields);
 }

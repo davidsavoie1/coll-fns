@@ -12,9 +12,27 @@ import {
   interpretFieldDeps,
   interpretJoinSelector,
   KEY_SEPARATOR,
+  mapFields,
   normalizeArgs,
+  validateMappings,
 } from "./publishHelpers";
 import { VOID_SELECTOR } from "./selectors";
+
+/* TODO: Track overlapping observer contributions to the same published document.
+ *
+ * Multiple observers can publish the same `collection/_id`. The current global
+ * counter prevents removing the document while at least one observer still
+ * follows it, but does not track which fields each observer contributes.
+ *
+ * Consequently, when one observer stops following a document, fields provided
+ * exclusively by that observer may remain on the client. This predates field
+ * mappings and can already occur with overlapping selectors or projections;
+ * mappings merely make the issue more visible.
+ *
+ * A complete solution would require tracking field contributions per observer
+ * and document. Conflicting values for the same field may additionally require
+ * retaining or recomputing each observer's value.
+ */
 
 const MAX_CONCURRENT = 10; // Maximum number of concurrent observer creation processed
 
@@ -62,6 +80,15 @@ const DEBUG = {
  */
 
 /**
+ * Synchronous mapping applied to one observed field before it is published.
+ * A function preserves the source key (1:1). An object maps the source value
+ * to the declared output keys (1:n); an empty object omits the source (1:0).
+ * @typedef {Function|Object.<string, Function>} PublishFieldMapping
+ */
+
+/** @typedef {Object.<string, PublishFieldMapping>} PublishFieldMappings */
+
+/**
  * Child publication args for nested observers.
  * May be explicit (`Coll` + `on`) or join shorthand (`join` key).
  * @typedef {Object} PublishChildArgs
@@ -70,6 +97,7 @@ const DEBUG = {
  * @property {PublishSelector} [on]
  * @property {PublishSelector} [selector] Backward-compatible alias for `on`.
  * @property {Object} [fields]
+ * @property {PublishFieldMappings} [mappings] Synchronous mappings applied only to fields emitted over DDP.
  * @property {PublishDeps} [deps]
  * @property {boolean} [awaited=true] If true, this child subtree contributes to publication readiness.
  * If false, this subtree initializes/reacts in background and does not block `ready()`.
@@ -84,6 +112,7 @@ const DEBUG = {
  * @property {Object} [ctx] Join context shared by the complete publication tree.
  * @property {PublishSelector} selector Root selector passed as `publish(..., selector, ...)`.
  * @property {Object} [fields]
+ * @property {PublishFieldMappings} [mappings] Synchronous mappings applied only to fields emitted over DDP.
  * @property {(PublishChildArgs|false|null|undefined)[]} [children]
  * @property {PublishDeps} [deps]
  * @property {boolean|string[]|Object} [debug]
@@ -94,6 +123,7 @@ const DEBUG = {
  * @typedef {Object} PublishOptions
  * @property {number} [maxConcurrent=10] Maximum concurrent child observer creations.
  * @property {Object} [ctx] Join context used for the complete publication tree.
+ * @property {PublishFieldMappings} [mappings] Synchronous mappings applied only to fields emitted over DDP.
  * Readiness is controlled per child via `awaited` (default true on each node).
  */
 
@@ -164,7 +194,11 @@ async function runPublication(publication, args = {}) {
   /* Map of observer by key representing the maybe reusable query */
   const observersByQuery = createRegistry();
 
-  /* Map of observers by published document */
+  /* Map of observers by published document.
+   * TODO: Track contributions by observer and field, not only their count.
+   * When overlapping observers publish the same collection/id, fields supplied
+   * only by an observer that later leaves are not retracted independently.
+   * Conflicting values would also need to be retained or recomputed per source. */
   const observersCountByDoc = createRegistry();
 
   /* Map of latest reconciled query keys a follower desires */
@@ -219,10 +253,13 @@ async function runPublication(publication, args = {}) {
       children = [], // [...{ ...args }] List of arguments to children observers. Non object arguments will be omitted, so they can be conditionally defined.
       deps, // Optional. List of parent field dependencies that must change to invalidate observers.
       debug, // Should debugging messages be displayed? true logs all; array of locations logs selected events; object maps locations to truthy/falsy values
+      mappings, // Stateless mappings applied to observed fields immediately before DDP emission
       on = selector, // Link to parent document that will get interpreted as a selector
       awaited = true, // Should the observer initialization be awaited before readiness?
       ...options // Cursor options
     } = normalizeArgs(args);
+
+    validateMappings(mappings);
 
     if (!selector && !on) {
       throw new Error(`'selector' or 'on' is necessary to create an observer.`);
@@ -259,7 +296,10 @@ async function runPublication(publication, args = {}) {
     const debugKey = createDebugKey(Coll, actSelector);
 
     /* Create a key from the cursor arguments so it can be reused. */
-    const queryKey = createQueryKey(Coll, actSelector, options);
+    const queryKey = createQueryKey(Coll, actSelector, {
+      ...options,
+      mappings,
+    });
 
     const shouldInvalidatePred = interpretFieldDeps(validChildren);
 
@@ -399,7 +439,9 @@ async function runPublication(publication, args = {}) {
 
       /* Publish document over DDP */
       log(DEBUG.DOC_ADDED, coll, _id);
-      publication.added?.(coll, _id, fields);
+
+      const mappedFields = mapFields(mappings, fields);
+      publication.added?.(coll, _id, mappedFields);
     }
 
     /* DDP remove doc, keeping docs registries in sync */
@@ -489,7 +531,9 @@ async function runPublication(publication, args = {}) {
           if (cancelled) return;
 
           log(DEBUG.DOC_CHANGED, coll, _id, fields);
-          publication.changed?.(coll, _id, fields);
+
+          const mappedFields = mapFields(mappings, fields);
+          publication.changed?.(coll, _id, mappedFields);
 
           /* If no child publication, no further processing required. */
           if (!validChildren?.length) return;

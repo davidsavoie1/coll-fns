@@ -3,6 +3,7 @@
 - Allow dot-notation keys in `publish` `deps`
 - Allow dot notation key joins
 - Allow passing a local join context to override global joins in `fetch` and `publish`
+- Allow stateless 1:1, 1:n and 1:0 field mappings in `publish`
 
 ---
 
