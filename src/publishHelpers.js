@@ -155,13 +155,13 @@ export function interpretFieldDeps(children) {
        * and trigger observers invalidation each time. */
       if (isFunc(dep)) {
         const res = await dep(fields, ...ancestors);
-        if (isArr(res)) return res.some((key) => hasOwn(fields, key));
+        if (isArr(res)) return res.some((key) => isDepInFields(fields, key));
 
         return !res;
       }
 
-      /* A key dep will simply check if it is included in the changed `fields` */
-      if (typeof dep === "string") return hasOwn(fields, dep);
+      /* A key dep triggers invalidation when included in the changed `fields`. */
+      if (typeof dep === "string") return isDepInFields(fields, dep);
 
       /* Any other type is invalid and will trigger invalidation */
       return true;
@@ -180,6 +180,15 @@ export function interpretFieldDeps(children) {
 
     return false;
   };
+}
+
+/* Check if a `dep` is included in `fields` or if its root
+ * in a dot-notation key is in fields (`root.leaf => root`) */
+function isDepInFields(fields, dep) {
+  if (typeof dep !== "string" || !isObj(fields)) return false;
+  if (hasOwn(fields, dep)) return true;
+  const rootDep = dep.split(".")[0];
+  return hasOwn(fields, rootDep);
 }
 
 /* Derive a list of props or a function
@@ -217,7 +226,8 @@ function deriveArgsDeps({ deps, selector, on = selector }) {
  * - Function = dynamically normalized deps
  * - undefined = unspecified deps
  *
- * Note: key matching is flat and exact against changed fields keys. */
+ * Note: dot-notation keys match themselves or their top-level root
+ * against changed fields keys. */
 function normalizeDeps(deps) {
   /* `undefined` deps is a special case where user didn't specify anything. */
   if (deps === undefined) return undefined;

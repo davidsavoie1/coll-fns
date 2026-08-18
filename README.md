@@ -57,7 +57,7 @@ Stop repeating business logic all over your code base. Define hooks on collectio
 - [Nested reactive publications](#nested-reactive-publications)
   - [When to use `publish`](#when-to-use-publish)
   - [`publish(publication, Coll, selector, options)`](#publishpublication-coll-selector-options)
-  - [Publication readiness](#publication-readiness)
+  - [Publication readiness and concurrency](#publication-readiness-and-concurrency)
   - [Publication context (`this` in Meteor)](#publication-context-this-in-meteor)
   - [How child declarations work](#how-child-declarations-work)
   - [Ancestors chain](#ancestors-chain)
@@ -1874,15 +1874,17 @@ Supported values:
 Special behavior when `deps` is `undefined`:
 
 - static selector object child: treated as no invalidation (`[]`)
-- array/function selector child: treated as potentially dependent and will always invalidate conservatively
+- function selector child: treated as potentially dependent and will always invalidate conservatively
 
 For array selectors, implicit deps are auto-derived from the `from` key.
 
-`deps` matching is flat:
+`deps` matching supports dot-notation paths without traversing the changed value:
 
-- matching is done against exact keys present in `changedFields`
-- no deep path traversal is performed by `publish()`
-- nested object deps only contribute top-level keys
+- a top-level dependency matches its exact key in `changedFields`
+- a dot-notation dependency matches either its exact key or its top-level root; for example, `root.leaf` looks for `root` in `changedFields`
+- nested object deps only contribute top-level keys; use a dot-notation key when the precise path must also be included in the parent field projection.
+
+The use of dot-notation deps is useful to limit nested fields to fetch, while staying consistent with the root level changed fields behaviour.
 
 ## Debugging
 
