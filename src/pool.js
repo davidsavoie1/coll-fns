@@ -26,6 +26,18 @@ function createDefaultPool() {
   });
 }
 
+/**
+ * Configure the shared pool used by deferred hooks.
+ * Must be called at startup, before the pool is first used.
+ *
+ * @param {Object} [args]
+ * @param {number} [args.maxConcurrent=10] Maximum number of active calls.
+ * @param {number} [args.maxPending=250] Maximum number of queued calls.
+ * @param {(error:unknown, call:Object) => void} [args.onError] Error handler.
+ * @param {'drop'|'shift'|Function} [args.onOverflow] Overflow strategy. By
+ * default, the incoming call is dropped and a warning is emitted.
+ * @returns {void}
+ */
 export function configurePool(args = {}) {
   if (poolLocked) {
     throw new Error(

@@ -2,7 +2,7 @@ import { getJoinPrefix } from "./join";
 import { filter, isObj } from "./util";
 
 /**
- * @typedef {Record<string, (0|1|boolean|FieldSpec)>} FieldSpec
+ * @typedef {Record<string, (number|boolean|FieldSpec)>} FieldSpec
  * A MongoDB-like field projection where:
  * - keys are field paths (may be nested objects or dot-notation)
  * - values are 1/true to include, 0/false to exclude, or nested FieldSpec

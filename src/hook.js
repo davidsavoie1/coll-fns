@@ -38,7 +38,7 @@ const FIRE_AND_FORGET_HOOK_TYPES = ["onInserted", "onUpdated", "onRemoved"];
  * Generic hook function signature.
  * The concrete arguments depend on the HookType (see HOOK_TYPES above).
  * Returning a promise is supported.
- * @typedef {(…args:any[]) => any|Promise<any>} HookFn
+ * @typedef {(...args:any[]) => any|Promise<any>} HookFn
  */
 
 /**
@@ -108,7 +108,7 @@ const hooksRegistry = new Map();
  *
  * @template TColl
  * @param {TColl} Coll - Collection class instance.
- * @param {Record<HookType, HookDef[]>} hooksObj - Object mapping hook types to arrays of hook definitions.
+ * @param {Partial<Record<HookType, HookDef[]>>} hooksObj - Object mapping hook types to arrays of hook definitions.
  * @throws {TypeError} If a hook list is not an array or an unknown hook type is provided.
  * @example
  * hook(Users, {

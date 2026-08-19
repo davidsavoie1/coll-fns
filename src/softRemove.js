@@ -138,7 +138,8 @@ function getSortRemoveArgs(Coll) {
  *
  * @template TColl
  * @param {TColl} Coll - Collection instance.
- * @param {Object|string} [selector={}] - Selector of docs to target.
+ * @param {Object|string} [selector={}] - Selector of docs to target. A string
+ *   is normalized to `{ _id: selector }` before calling the active protocol.
  * @param {Object|(() => Object|Promise<Object>)|null|undefined} [keepModifier]
  *   Modifier to apply to kept docs, or a (possibly async) factory returning one.
  *   If omitted, falls back to the registered default keepModifier.
@@ -172,6 +173,7 @@ export function softRemove(
 ) {
   const { fields, shouldKeepDoc, defaultKeepModifier } =
     getSortRemoveArgs(Coll);
+  const normalizedSelector = isObj(selector) ? selector : { _id: selector };
 
   /* Return total or detailed counts. */
   function formatResult({ removed = 0, updated = null }) {
@@ -182,7 +184,7 @@ export function softRemove(
   return then(
     /* Fetch docs targeted by the removal
      * with provided fields and without transform. */
-    fetchList(Coll, selector, {
+    fetchList(Coll, normalizedSelector, {
       fields: { ...(fields ?? {}), _id: 1 },
       transform: null,
     }),
@@ -200,7 +202,7 @@ export function softRemove(
 
           /* If no doc targeted for sort remove, simply proceed with removal. */
           if (!idsToKeep.length) {
-            return then(remove(Coll, selector), (removed) =>
+            return then(remove(Coll, normalizedSelector), (removed) =>
               formatResult({ removed })
             );
           }
@@ -213,7 +215,7 @@ export function softRemove(
                 [
                   remove(Coll, {
                     $and: [
-                      isObj(selector) ? selector : { _id: selector },
+                      normalizedSelector,
                       { _id: { $nin: idsToKeep } },
                     ],
                   }),

@@ -4,6 +4,10 @@
 - Allow dot notation key joins
 - Allow passing a local join context to override global joins in `fetch` and `publish`
 - Allow stateless 1:1, 1:n and 1:0 field mappings in `publish`
+- Fix boolean values returned by function-based publication `deps`
+- Keep complete non-awaited publication branches detached from initial readiness
+- Disable document transforms in `fetchIds` and `exists`
+- Normalize string selectors in `softRemove` before protocol calls
 
 ---
 

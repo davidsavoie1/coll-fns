@@ -11,6 +11,8 @@ import EJSON from "ejson";
  *   Return an array of documents for selector/options.
  * @property {(Coll:any, selector?:Object, callbacks?:Object, options?:Object) => {stop:Function}|Promise<{stop:Function}>} observe
  *   Observe matching documents and call change callbacks. Must return a handle with `stop()`.
+ * @property {(Coll:any) => string} getName
+ *   Return the collection name used when publishing documents.
  * @property {(value:any) => string} stringify
  *   Stable stringifier used for internal query keys (defaults to EJSON canonical stringify).
  * @property {(Coll:any) => ((doc:any)=>any)|undefined} getTransform

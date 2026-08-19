@@ -7,13 +7,14 @@ export interface FieldSpec {
   [key: string]: FieldValue;
 }
 
-export interface FetchOptions<TDoc = AnyObject> extends AnyObject {
+export interface FetchOptions<TDoc = AnyObject, TResult = TDoc>
+  extends AnyObject {
   ctx?: JoinContext;
   fields?: FieldSpec;
   sort?: AnyObject;
   limit?: number;
   skip?: number;
-  transform?: ((doc: TDoc) => any) | null;
+  transform?: ((doc: TDoc) => TResult) | null;
 }
 
 export interface Protocol<TColl = any, TDoc = AnyObject> {
@@ -205,6 +206,11 @@ export type PublishFieldMapping =
   | Record<string, (value: any) => any>;
 
 export type PublishFieldMappings = Record<string, PublishFieldMapping>;
+export type PublishFieldMappingsOption =
+  | PublishFieldMappings
+  | false
+  | null
+  | undefined;
 
 export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
   Coll?: any;
@@ -214,7 +220,7 @@ export interface PublishChildArgs<TParent = AnyObject> extends AnyObject {
   selector?: PublishSelector<TParent>;
   fields?: FieldSpec;
   /** Stateless field mappings applied immediately before publication. */
-  mappings?: PublishFieldMappings;
+  mappings?: PublishFieldMappingsOption;
   children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
   deps?: PublishDeps<TParent>;
   awaited?: boolean;
@@ -225,9 +231,8 @@ export interface PublishOptions<TParent = AnyObject> extends AnyObject {
   ctx?: JoinContext;
   fields?: FieldSpec;
   /** Stateless field mappings applied immediately before publication. */
-  mappings?: PublishFieldMappings;
+  mappings?: PublishFieldMappingsOption;
   children?: Array<PublishChildArgs<TParent> | false | null | undefined>;
-  deps?: PublishDeps<TParent>;
   debug?: boolean | string[] | Record<string, boolean>;
   maxConcurrent?: number;
 }
@@ -247,19 +252,27 @@ export function count<TColl>(
   options?: AnyObject
 ): MaybePromise<number>;
 
-export function fetchList<TColl, TDoc = AnyObject>(
+export function fetchList<
+  TColl,
+  TDoc = AnyObject,
+  TResult = TDoc,
+>(
   Coll: TColl,
   selector?: AnyObject,
-  options?: FetchOptions<TDoc>
-): MaybePromise<TDoc[]>;
+  options?: FetchOptions<TDoc, TResult>
+): MaybePromise<TResult[]>;
 
-export function fetchOne<TColl, TDoc = AnyObject>(
+export function fetchOne<
+  TColl,
+  TDoc = AnyObject,
+  TResult = TDoc,
+>(
   Coll: TColl,
   selector: AnyObject,
-  options?: FetchOptions<TDoc>
-): MaybePromise<TDoc | undefined>;
+  options?: FetchOptions<TDoc, TResult>
+): MaybePromise<TResult | undefined>;
 
-export function fetchIds<TColl, TId = string>(
+export function fetchIds<TColl, TId = any>(
   Coll: TColl,
   selector: AnyObject,
   options?: FetchOptions
@@ -309,7 +322,7 @@ export function publish(
   Coll: any,
   selector: PublishSelector,
   options?: PublishOptions
-): Promise<{ stop: () => void }>;
+): Promise<{ stop: () => void } | undefined>;
 
 export function setProtocol<TColl = any, TDoc = AnyObject>(
   methods?: Partial<Protocol<TColl, TDoc>>
@@ -339,7 +352,7 @@ export function update<TColl>(
 ): MaybePromise<number>;
 
 export const protocols: {
-  meteorAsync: Protocol;
-  meteorSync: Protocol;
-  node: Protocol;
+  meteorAsync: Partial<Protocol>;
+  meteorSync: Partial<Protocol>;
+  node: Partial<Protocol>;
 };

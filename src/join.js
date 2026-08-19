@@ -67,11 +67,11 @@ let globalJoinsDictionary = undefined;
  * @property {*} Coll - The target collection to join with.
  * @property {JoinOn} on - Relation description (array/function/object).
  * @property {boolean} [single] - If true, attach a single document instead of an array.
- * @property {(joined: any[]|any, parent: any) => any} [postFetch] - Transform the joined value before attaching.
+ * @property {(joined: any[]|any, parent: any) => any} [postFetch] - Synchronously transform the joined value before attaching it.
  * @property {Object} [deps] - Parent fields required to perform the join when `on` is a function.
  * @property {Object} [fields] - Backward-compatible alias for `deps`.
  * @property {number} [limit] - Limit for the joined fetch (applies when not single).
- * @property {any} [options] - Any extra options passed through to the underlying fetch/find implementation.
+ * Additional properties are forwarded as options to the underlying joined fetch.
  */
 
 /**

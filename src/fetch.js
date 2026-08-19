@@ -23,7 +23,7 @@ import { getArrayJoinSelector } from "./selectors";
  * @property {Object} [sort] - Sort specification (e.g., { createdAt: -1 }).
  * @property {number} [limit] - Max number of documents to return.
  * @property {number} [skip] - Number of documents to skip.
- * @property {Function} [transform] - Document transform function. If omitted, protocol getTransform(Coll) is used.
+ * @property {Function|null} [transform] - Document transform function. If omitted, protocol getTransform(Coll) is used; null disables it.
  * @property {Object} [ctx] - Join context used for the complete fetch tree.
  *
  * @typedef {Object} JoinDef
@@ -36,8 +36,9 @@ import { getArrayJoinSelector } from "./selectors";
  * @property {Object} [deps] - Parent fields required to compute function joins.
  * @property {Object} [fields] - Backward-compatible alias for `deps`.
  * @property {boolean} [single] - If true, attach a single doc instead of an array.
- * @property {Function} [postFetch] - (joined, parentDoc) => any. Final shaping of joined value.
+ * @property {Function} [postFetch] - Synchronous `(joined, parentDoc) => any` final shaping of the joined value.
  * @property {number} [limit] - Limit for joined query when single is false.
+ * Additional properties are forwarded as options to the joined fetch.
  */
 
 /**
@@ -335,22 +336,28 @@ export function fetchOne(Coll, selector, options = {}) {
 
 /**
  * Fetch only document IDs for the selector.
+ * Collection and explicit transforms are disabled so `_id` remains available.
  *
  * @template TColl
  * @param {TColl} Coll - The collection instance.
  * @param {Object} selector - MongoDB-style query selector.
  * @param {FetchOptions} [options] - Fetch options.
- * @returns {Array<string>|Promise<Array<string>>} Array of IDs.
+ * @returns {Array<*>|Promise<Array<*>>} Array of IDs.
  */
 export function fetchIds(Coll, selector, options) {
   return then(
-    fetchList(Coll, selector, { ...options, fields: { _id: 1 } }),
+    fetchList(Coll, selector, {
+      ...options,
+      fields: { _id: 1 },
+      transform: null,
+    }),
     (res) => pluckIds(res)
   );
 }
 
 /**
  * Check existence of at least one document matching selector.
+ * Collection transforms are disabled so they cannot alter the boolean result.
  *
  * @template TColl
  * @param {TColl} Coll - The collection instance.
@@ -360,7 +367,7 @@ export function fetchIds(Coll, selector, options) {
 export function exists(Coll, selector) {
   return then(
     // Limit to _id field to ensure minimal data
-    fetchOne(Coll, selector, { fields: { _id: 1 } }),
+    fetchOne(Coll, selector, { fields: { _id: 1 }, transform: null }),
 
     (doc) => !!doc
   );
@@ -368,8 +375,8 @@ export function exists(Coll, selector) {
 
 /**
  * Extract _id values from an array of documents.
- * @param {Array<{_id: string}>} arr - Documents to pluck IDs from.
- * @returns {Array<string>} List of IDs.
+ * @param {Array<{_id: *}>} arr - Documents to pluck IDs from.
+ * @returns {Array<*>} List of IDs.
  * @internal
  */
 function pluckIds(arr) {

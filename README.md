@@ -620,7 +620,7 @@ Any additional properties defined on the join (other than `Coll`, `on`, `single`
 
 ### `postFetch`
 
-Children documents might need to be modified (transformed, ordered, filtered...) after being fetched. The `postFetch: (childrenDocs, parentDoc) => childrenDocs` join definition property can be used to do so.
+Children documents might need to be modified (transformed, ordered, filtered...) after being fetched. The `postFetch: (childrenDocs, parentDoc) => childrenDocs` join definition property can be used to do so. `postFetch` must be synchronous; a returned promise is not awaited.
 
 The second argument of the function is the parent document. If some of its properties are needed, they should be declared in the join `deps` property so they are guaranteed to be fetched on the parent.
 
@@ -1083,10 +1083,12 @@ const user = fetchOne(
 
 ## `fetchIds(Coll, selector, options)`
 
-Fetch only the `_id` field of matching documents. `fields` option will be ignored.
+Fetch only the `_id` field of matching documents. The `fields` and `transform`
+options are ignored, and the collection transform is disabled so identifiers
+are returned unchanged.
 
 ```js
-import { fetchOne } from "coll-fns";
+import { fetchIds } from "coll-fns";
 import { Users } from "/collections";
 
 const userIds = fetchIds(Users, { status: "active" });
@@ -1094,10 +1096,11 @@ const userIds = fetchIds(Users, { status: "active" });
 
 ## `exists(Coll, selector)`
 
-Check if any document matches the selector.
+Check if any document matches the selector. Collection transforms are disabled
+so they cannot alter the existence result.
 
 ```js
-import { fetchOne } from "coll-fns";
+import { exists } from "coll-fns";
 import { Users } from "/collections";
 
 const hasActiveUsers = exists(Users, { status: "active" });
@@ -1495,6 +1498,8 @@ At least one of `when` or `docToCollSelectorPairs` must be provided.
 
 Run a remove operation that can keep some matched documents (and optionally update those kept documents).
 
+For backward compatibility, `selector` can be an identifier string. It is normalized to `{ _id: selector }` before any fetch, update or removal is delegated to the active protocol.
+
 ```js
 import { softRemove } from "coll-fns";
 
@@ -1862,11 +1867,13 @@ Meteor.publish("posts.tree", async function postsTree() {
 
 Readiness is controlled per child with `awaited` (default: `true`):
 
-- `awaited: true`: wait for this child subtree before calling `ready()`
-- `awaited: false`: do not wait for this child subtree; it loads/reacts in background
+- `awaited: true`: wait for this child and its awaited descendants before calling `ready()`
+- `awaited: false`: do not wait for this child or any of its descendants; the complete branch loads/reacts in background
 
 Use `awaited: true` for data the screen must have immediately, and `awaited: false` for optional or heavy branches.
-If not specified, a child inherits `awaited` from its parent.
+If not specified, a child inherits `awaited` from its parent. Once a branch is detached with `awaited: false`, a descendant cannot make it contribute to the initial readiness phase again by setting `awaited: true`.
+
+`awaited` only controls initial observer creation. Children created or reconciled after reactive changes always run in the active background pool because `ready()` has already been emitted.
 
 `options.maxConcurrent` controls how many child observer creations can run at
 the same time (`10` by default). This can only be defined at the publication root, not on children.
@@ -1926,7 +1933,7 @@ Meteor.publish("posts.tree", async function () {
 });
 ```
 
-Avoid `return publish(...)` and `return await publish(...)`: the promise resolves to an internal `{ stop }` handle, not to a cursor or an array of cursors as expected from a cursor-return publication. Awaiting also keeps initialization errors in the asynchronous publication handler.
+Avoid `return publish(...)` and `return await publish(...)`: on success, the promise resolves to an internal `{ stop }` handle, not to a cursor or an array of cursors as expected from a cursor-return publication. Initialization errors are sent through `this.error(error)`, which terminates the affected subscription without rethrowing into the publication handler.
 
 Minimal expected shape of `publication`:
 
@@ -2019,13 +2026,19 @@ Supported values:
 - `false`: never invalidate
 - `"field"` or `["fieldA", "fieldB"]`: invalidate only when those keys are present in changed fields
 - `{ fieldA: 1, fieldB: true }`: object shorthand converted to watched keys (truthy top-level keys only)
-- function `(changedFields, parent, ...ancestors) => depsLike`: dynamic rule
+- function `(changedFields, parent, ...ancestors) => depsLike`: dynamic rule returning any other supported `deps` value, synchronously or asynchronously
 - `undefined`: special behavior
 
 Special behavior when `deps` is `undefined`:
 
 - static selector object child: treated as no invalidation (`[]`)
 - function selector child: treated as potentially dependent and will always invalidate conservatively
+
+The same meanings apply when a function returns a `deps` value:
+
+- `true` always invalidates and `false` never invalidates
+- a string, array, `Set` or object watches the corresponding changed fields
+- `undefined` invalidates conservatively
 
 For array selectors, implicit deps are auto-derived from the `from` key.
 
@@ -2040,6 +2053,8 @@ The use of dot-notation deps is useful to limit nested fields to fetch, while st
 ## Mapping published fields
 
 The `mappings` option can reshape individual fields immediately before they are emitted to the client. Mappings are applied to both `added` and `changed` events without retaining copies of published documents.
+
+A falsy `mappings` value means that mappings are not applicable, which allows conditional declarations such as `mappings: shouldMap && fieldMappings`.
 
 Fields without a mapping are published unchanged. A mapping function transforms one field while preserving its name (1:1):
 

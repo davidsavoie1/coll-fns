@@ -74,8 +74,10 @@ const DEBUG = {
 
 /**
  * Child observer dependencies used to decide invalidation on parent change.
- * Key matching is flat (exact key in changed fields), not deep path traversal.
+ * Matching does not traverse changed values. A dependency matches its exact
+ * key or, for dot-notation paths, its top-level root in changed fields.
  * Object deps are supported and converted to a list of top-level truthy keys.
+ * Function deps may asynchronously return any other supported deps value.
  * @typedef {boolean|string|string[]|Set<string>|Object|Function|undefined} PublishDeps
  */
 
@@ -97,10 +99,11 @@ const DEBUG = {
  * @property {PublishSelector} [on]
  * @property {PublishSelector} [selector] Backward-compatible alias for `on`.
  * @property {Object} [fields]
- * @property {PublishFieldMappings} [mappings] Synchronous mappings applied only to fields emitted over DDP.
+ * @property {PublishFieldMappings|false|null|undefined} [mappings] Synchronous mappings applied only to fields emitted over DDP; falsy means not applicable.
  * @property {PublishDeps} [deps]
- * @property {boolean} [awaited=true] If true, this child subtree contributes to publication readiness.
- * If false, this subtree initializes/reacts in background and does not block `ready()`.
+ * @property {boolean} [awaited=true] If true, this child can contribute to publication readiness.
+ * If false, its complete subtree initializes/reacts in background and cannot
+ * rejoin the readiness phase.
  * @property {(PublishChildArgs|false|null|undefined)[]} [children]
  * @property {boolean|string[]|Object} [debug]
  */
@@ -112,7 +115,7 @@ const DEBUG = {
  * @property {Object} [ctx] Join context shared by the complete publication tree.
  * @property {PublishSelector} selector Root selector passed as `publish(..., selector, ...)`.
  * @property {Object} [fields]
- * @property {PublishFieldMappings} [mappings] Synchronous mappings applied only to fields emitted over DDP.
+ * @property {PublishFieldMappings|false|null|undefined} [mappings] Synchronous mappings applied only to fields emitted over DDP; falsy means not applicable.
  * @property {(PublishChildArgs|false|null|undefined)[]} [children]
  * @property {PublishDeps} [deps]
  * @property {boolean|string[]|Object} [debug]
@@ -123,7 +126,10 @@ const DEBUG = {
  * @typedef {Object} PublishOptions
  * @property {number} [maxConcurrent=10] Maximum concurrent child observer creations.
  * @property {Object} [ctx] Join context used for the complete publication tree.
- * @property {PublishFieldMappings} [mappings] Synchronous mappings applied only to fields emitted over DDP.
+ * @property {Object} [fields] Field projection, including implicit join children.
+ * @property {PublishFieldMappings|false|null|undefined} [mappings] Synchronous mappings applied only to fields emitted over DDP; falsy means not applicable.
+ * @property {(PublishChildArgs|false|null|undefined)[]} [children] Nested publication declarations.
+ * @property {boolean|string[]|Object} [debug] Publication debug configuration.
  * Readiness is controlled per child via `awaited` (default true on each node).
  */
 
@@ -141,8 +147,9 @@ const DEBUG = {
  * @param {PublicationContext} publication Publication callbacks context.
  * @param {*} Coll Root collection.
  * @param {PublishSelector} selector Root selector.
- * @param {PublishOptions} [options={}] Internal scheduling options.
- * @returns {Promise<{stop: Function}>} Handle with a `stop` method.
+ * @param {PublishOptions} [options={}] Publication, cursor and scheduling options.
+ * @returns {Promise<{stop: Function}|undefined>} Handle with a `stop` method,
+ * or undefined when an initialization error is handled by `publication.error`.
  */
 export async function publish(
   publication, // { added, changed, removed, ready, error, onStop }
@@ -512,15 +519,17 @@ async function runPublication(publication, args = {}) {
            * for each child publication. */
           validChildren.forEach((childArgs) => {
             const childAwaited = childArgs.awaited ?? awaited;
+            const childInitializing = _initializing && childAwaited;
             /* Awaited children are scheduled on initialization pool while this observer
              * is still in its bootstrap phase. Non-awaited children (or live phase work)
-             * are scheduled on active pool and do not block publication readiness. */
-            const pool = _initializing && childAwaited ? initPool : activePool;
+             * are scheduled on active pool and keep their complete subtree detached
+             * from publication readiness. */
+            const pool = childInitializing ? initPool : activePool;
 
             pool.add(registerChildObserver, {
               childArgs,
               followerKey,
-              initializing: _initializing,
+              initializing: childInitializing,
               token,
               ancestors: newAncestors,
             });
