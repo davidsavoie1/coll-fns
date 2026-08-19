@@ -162,15 +162,19 @@ export function interpretFieldDeps(children) {
     return async function (fields, ...ancestors) {
       if (typeof dep === "boolean") return dep;
 
-      /* A function dep should return the same type of list as `deps` argument,
-       * ie a list of keys to watch in the changed `fields`.
-       * If it returns a falsy value, it will be treated as undefined deps
-       * and trigger observers invalidation each time. */
+      /* A function dep returns another supported `deps` value. Booleans keep
+       * their direct meaning, field-like values are normalized to an array,
+       * and undefined conservatively triggers invalidation. */
       if (isFunc(dep)) {
         const res = await dep(fields, ...ancestors);
-        if (isArr(res)) return res.some((key) => isDepInFields(fields, key));
 
-        return !res;
+        if (typeof res === "boolean") return res;
+
+        if (isArr(res)) {
+          return res.some((key) => isDepInFields(fields, key));
+        }
+
+        return res === undefined;
       }
 
       /* A key dep triggers invalidation when included in the changed `fields`. */
