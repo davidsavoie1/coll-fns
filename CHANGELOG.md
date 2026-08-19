@@ -1,4 +1,4 @@
-# NEXT
+# 1.7.0 - 2026-08-18
 
 - Allow dot-notation keys in `publish` `deps`
 - Allow dot notation key joins
