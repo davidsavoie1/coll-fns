@@ -1,4 +1,4 @@
-# NEXT
+# 1.7.1 - 2026-11-18
 
 - Fix | Error when using object mappings in `publish`
 - Split documentation in multiple files
