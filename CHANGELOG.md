@@ -1,6 +1,7 @@
 # NEXT
 
 - Fix | Error when using object mappings in `publish`
+- Split documentation in multiple files
 
 ---
 
