@@ -548,7 +548,7 @@ export function mapFields(mappings, fields) {
 
       if (isObj(mapping)) {
         /* Can also be an object of functions by field to publish */
-        const mappedFields = map((fn) => fn(value), mapping);
+        const mappedFields = map(([key, fn]) => [key, fn(value)], mapping);
 
         return { ...remainingFields, ...mappedFields };
       }

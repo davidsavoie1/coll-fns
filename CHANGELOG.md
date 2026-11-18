@@ -1,3 +1,9 @@
+# NEXT
+
+- Fix | Error when using object mappings in `publish`
+
+---
+
 # 1.7.0 - 2026-08-18
 
 - Allow dot-notation keys in `publish` `deps`
